@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:plane_messenger/core/security/key_manager.dart';
+import 'package:plane_messenger/core/user_prefs.dart';
 import 'package:plane_messenger/data/datasources/local/isar_service.dart';
 import 'package:plane_messenger/data/datasources/p2p/connection_manager.dart';
 import 'package:plane_messenger/data/models/message_entity.dart';
@@ -74,7 +75,12 @@ class MeshRepositoryImpl {
 
   Future<void> _sendHandshake(String endpointId) async {
     final myPublicKey = await keyManager.publicKeyBase64;
-    final handshake = jsonEncode({'type': 'handshake', 'pubKey': myPublicKey});
+    final nickname = await UserPrefs.getNickname();
+    final handshake = jsonEncode({
+      'type': 'handshake',
+      'pubKey': myPublicKey,
+      if (nickname != null && nickname.isNotEmpty) 'nickname': nickname,
+    });
     await connectionManager.sendPayload(
       endpointId,
       Uint8List.fromList(utf8.encode(handshake)),
@@ -91,6 +97,26 @@ class MeshRepositoryImpl {
   //   "s": "<base64-signature>"                    // Ed25519 sig of "d"
   // }
   // ---------------------------------------------------------------------------
+
+  /// Sends a `nickname_update` packet to every currently connected peer so
+  /// they immediately reflect the local user's new display name.
+  Future<void> broadcastNicknameUpdate(String nickname) async {
+    final trimmed = nickname.trim();
+    final packet = jsonEncode({
+      'type': 'nickname_update',
+      'nickname': trimmed,
+    });
+    final bytes = Uint8List.fromList(utf8.encode(packet));
+
+    for (final endpointId in _connectedEndpoints) {
+      try {
+        await connectionManager.sendPayload(endpointId, bytes);
+      } catch (e) {
+        debugPrint('[MESH] Failed to send nickname_update to $endpointId: $e');
+      }
+    }
+    debugPrint('[MESH] Broadcast nickname_update "$trimmed" to ${_connectedEndpoints.length} peer(s)');
+  }
 
   Future<void> broadcastMessage(String content) async {
     final trimmed = content.trim();
@@ -159,6 +185,8 @@ class MeshRepositoryImpl {
         await _handleMessagePacket(packet, endpointId);
       } else if (packet['type'] == 'handshake') {
         await _handleHandshake(packet, endpointId);
+      } else if (packet['type'] == 'nickname_update') {
+        await _handleNicknameUpdate(packet, endpointId);
       } else {
         debugPrint('[MESH] Unknown packet type from $endpointId');
       }
@@ -274,20 +302,95 @@ class MeshRepositoryImpl {
       return;
     }
 
-    final existing = await isarService.getPeer(endpointId);
-    if (existing != null) {
-      existing.publicKey = publicKey;
-      existing.lastSeen = DateTime.now().millisecondsSinceEpoch;
-      await isarService.savePeer(existing);
-    } else {
-      final peer = PeerEntity()
-        ..deviceId = endpointId
-        ..publicKey = publicKey
-        ..lastSeen = DateTime.now().millisecondsSinceEpoch
-        ..isConnected = true;
-      await isarService.savePeer(peer);
+    // Reject self-connections: the device can discover its own advertisement
+    // in P2P_CLUSTER mode. If the incoming public key is ours, disconnect and bail.
+    // Also delete the stub peer record saved by onConnectionEstablished() so no
+    // ghost card remains in the database.
+    final myPublicKey = await keyManager.publicKeyBase64;
+    if (publicKey == myPublicKey) {
+      debugPrint('[MESH] Ignoring self-connection from $endpointId');
+      _connectedEndpoints.remove(endpointId);
+      await connectionManager.disconnectFromEndpoint(endpointId);
+      await isarService.deletePeer(endpointId);
+      return;
     }
-    debugPrint('[MESH] Handshake complete with $endpointId');
+
+    final rawNickname = packet['nickname'];
+    final nickname = rawNickname is String && rawNickname.trim().isNotEmpty
+        ? rawNickname.trim()
+        : null;
+
+    // Look up whether we already have a record for this public key — either
+    // from an earlier session (historical) or a duplicate connection within
+    // the current session (both sides simultaneously initiated a connection).
+    final knownPeer = await isarService.getPeerByPublicKey(publicKey);
+
+    if (knownPeer != null && knownPeer.deviceId != endpointId) {
+      // The same physical device is reconnecting under a new endpoint ID.
+      // Delete the empty stub created by onConnectionEstablished() for the
+      // new endpoint, then update the existing record in-place so historical
+      // data — crucially the stored nickname — is preserved.
+      await isarService.deletePeer(endpointId);
+
+      // Close the stale endpoint only if it is still active in this session.
+      if (_connectedEndpoints.remove(knownPeer.deviceId)) {
+        try {
+          await connectionManager.disconnectFromEndpoint(knownPeer.deviceId);
+        } catch (_) {
+          // Endpoint from a previous session; Nearby Connections no longer
+          // knows about it — ignore the error.
+        }
+      }
+
+      knownPeer.deviceId = endpointId;
+      knownPeer.isConnected = true;
+      knownPeer.lastSeen = DateTime.now().millisecondsSinceEpoch;
+      // Prefer the nickname from the handshake; fall back to the stored one.
+      if (nickname != null) knownPeer.nickname = nickname;
+      await isarService.savePeer(knownPeer);
+      debugPrint('[MESH] Handshake complete with $endpointId (known peer, nickname: ${knownPeer.nickname})');
+    } else {
+      // Genuinely new peer — update the stub record created by
+      // onConnectionEstablished() with the public key and nickname.
+      final stub = await isarService.getPeer(endpointId);
+      if (stub != null) {
+        stub.publicKey = publicKey;
+        stub.lastSeen = DateTime.now().millisecondsSinceEpoch;
+        if (nickname != null) stub.nickname = nickname;
+        await isarService.savePeer(stub);
+      } else {
+        final peer = PeerEntity()
+          ..deviceId = endpointId
+          ..publicKey = publicKey
+          ..nickname = nickname
+          ..lastSeen = DateTime.now().millisecondsSinceEpoch
+          ..isConnected = true;
+        await isarService.savePeer(peer);
+      }
+      debugPrint('[MESH] Handshake complete with $endpointId (new peer, nickname: $nickname)');
+    }
+  }
+
+  Future<void> _handleNicknameUpdate(
+    Map<String, dynamic> packet,
+    String fromEndpointId,
+  ) async {
+    final rawNickname = packet['nickname'];
+    if (rawNickname is! String) {
+      debugPrint('[MESH] Dropping invalid nickname_update from $fromEndpointId');
+      return;
+    }
+
+    final peer = await isarService.getPeer(fromEndpointId);
+    if (peer == null) {
+      debugPrint('[MESH] Received nickname_update from unknown peer $fromEndpointId');
+      return;
+    }
+
+    final nickname = rawNickname.trim();
+    peer.nickname = nickname.isNotEmpty ? nickname : null;
+    await isarService.savePeer(peer);
+    debugPrint('[MESH] Updated nickname for $fromEndpointId to "$nickname"');
   }
 
   // Adds [id] to the seen-IDs set, evicting the oldest entry if at capacity.

@@ -20,9 +20,29 @@ Flutter provides the widget tree, Material Design 3 theming, and the reactive `S
 ### `nearby_connections` ^4.3.0
 The core transport layer. Wraps Google's **Nearby Connections API**, which multiplexes over Bluetooth Classic, Bluetooth LE, and Wi-Fi Direct without requiring an internet connection or any pairing step.
 
-- **Strategy:** `P2P_CLUSTER` — each device simultaneously advertises and discovers, forming a decentralised mesh.
+- **Strategy:** `P2P_CLUSTER` — each device simultaneously advertises and discovers, forming a decentralised mesh. Only devices advertising the same `serviceId` (`com.plane.messenger`) are visible; random Bluetooth peripherals are ignored by the API.
 - **Role in app:** `ConnectionManager` (`lib/data/datasources/p2p/connection_manager.dart`) wraps all Nearby Connections calls, exposing clean callbacks for connection lifecycle and payload receipt.
 - **Mesh routing:** `MeshRepositoryImpl` (`lib/data/repositories/mesh_repository_impl.dart`) implements TTL-based flooding: each broadcast message is relayed by every receiving peer until its TTL reaches zero, ensuring it reaches devices that are not directly adjacent.
+
+#### Bidirectional connection handshake
+
+Every connection is a **single, symmetric channel** established through mutual acceptance:
+
+```
+Device A (Discoverer)                  Device B (Advertiser)
+──────────────────────────────────────────────────────────────
+startDiscovery() finds B
+requestConnection(B) ─────────────────►
+                       onConnectionInitiated fires on BOTH A and B
+acceptConnection(B) ◄──────────────── acceptConnection(A)
+                       onConnectionResult(CONNECTED) fires on BOTH
+◄──────────── bidirectional data flow ────────────►
+```
+
+Key rules implemented in `ConnectionManager`:
+1. **Both sides must accept.** `onConnectionInitiated` fires on the discoverer (via the `requestConnection` callback) AND on the advertiser (via the `startAdvertising` callback). Both call `acceptConnection`, which registers the payload receiver and unblocks the link.
+2. **Unified handlers.** `startAdvertising` and `requestConnection` share the same private `_handleConnectionInitiated`, `_handleConnectionResult`, and `_handleDisconnected` methods so both code paths behave identically.
+3. **`onConnectionResult(CONNECTED)` fires on both sides** once mutual acceptance is confirmed. Only then does `MeshRepositoryImpl.onConnectionEstablished` run and the Ed25519 handshake packet is sent.
 
 ---
 

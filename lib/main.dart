@@ -5,6 +5,7 @@ import 'package:plane_messenger/core/security/key_manager.dart';
 import 'package:plane_messenger/data/datasources/local/isar_service.dart';
 import 'package:plane_messenger/data/datasources/p2p/connection_manager.dart';
 import 'package:plane_messenger/data/repositories/mesh_repository_impl.dart';
+import 'package:plane_messenger/core/user_prefs.dart';
 import 'package:plane_messenger/presentation/pages/error_page.dart';
 import 'package:plane_messenger/presentation/pages/radar_page.dart';
 
@@ -32,6 +33,10 @@ void main() async {
     debugPrint('[INIT] Initializing Isar database...');
     final isarService = IsarService();
     await isarService.openDB();
+    // Reset connection flags from the previous session. Records are kept so
+    // that returning devices can be matched by public key and their stored
+    // nicknames are preserved across restarts.
+    await isarService.resetConnectionStatus();
     getIt.registerSingleton<IsarService>(isarService);
     debugPrint('[INIT] ✓ Isar database initialized');
 
@@ -43,10 +48,14 @@ void main() async {
 
     // Step 4: Initialize ConnectionManager
     debugPrint('[INIT] Initializing ConnectionManager...');
-    // Use the first 8 characters of the public key as a short device identifier
+    // Use the stored nickname; fall back to a short public-key prefix if unset
     const int kUserNameLength = 8;
+    final storedNickname = await UserPrefs.getNickname();
+    final displayName = (storedNickname != null && storedNickname.isNotEmpty)
+        ? storedNickname
+        : (await keyManager.publicKeyBase64).substring(0, kUserNameLength);
     final connectionManager = ConnectionManager(
-      userName: (await keyManager.publicKeyBase64).substring(0, kUserNameLength),
+      userName: displayName,
       onConnectionInitiated: (id, info) {
         // Auto-accept for MVP
         debugPrint('[P2P] Connection initiated with $id');

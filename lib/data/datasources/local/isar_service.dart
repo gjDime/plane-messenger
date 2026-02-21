@@ -61,8 +61,39 @@ class IsarService {
     return isar.peerEntitys.filter().deviceIdEqualTo(deviceId).findFirst();
   }
 
+  /// Finds a peer whose Ed25519 public key matches [publicKey], regardless of
+  /// endpoint ID. Used to detect the same physical device connecting twice.
+  Future<PeerEntity?> getPeerByPublicKey(String publicKey) async {
+    final isar = await db;
+    return isar.peerEntitys.filter().publicKeyEqualTo(publicKey).findFirst();
+  }
+
+  /// Deletes the peer record identified by [deviceId].
+  Future<void> deletePeer(String deviceId) async {
+    final isar = await db;
+    await isar.writeTxn(() async {
+      await isar.peerEntitys.filter().deviceIdEqualTo(deviceId).deleteAll();
+    });
+  }
+
   Stream<List<PeerEntity>> watchPeers() async* {
     final isar = await db;
     yield* isar.peerEntitys.where().watch(fireImmediately: true);
+  }
+
+  /// Marks every stored peer as disconnected without deleting the records.
+  /// Called on startup so stale [isConnected] flags from the previous session
+  /// are cleared while historical data (public key, nickname) is preserved.
+  /// When a known device reconnects, [_handleHandshake] matches it by public
+  /// key and reuses the existing record in-place.
+  Future<void> resetConnectionStatus() async {
+    final isar = await db;
+    await isar.writeTxn(() async {
+      final peers = await isar.peerEntitys.where().findAll();
+      for (final peer in peers) {
+        peer.isConnected = false;
+      }
+      await isar.peerEntitys.putAll(peers);
+    });
   }
 }
