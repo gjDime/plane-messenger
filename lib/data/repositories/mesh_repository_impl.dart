@@ -24,10 +24,7 @@ class MeshRepositoryImpl {
   final IsarService isarService;
   final KeyManager keyManager;
 
-  // In-memory set of seen message IDs for flood-control deduplication
   final Set<String> _seenMessageIds = {};
-
-  // Tracks which Nearby Connections endpoints are currently connected
   final Set<String> _connectedEndpoints = {};
 
   MeshRepositoryImpl({
@@ -42,7 +39,6 @@ class MeshRepositoryImpl {
   }
 
   Future<void> onConnectionEstablished(String endpointId) async {
-    debugPrint('[MESH] Connection established with $endpointId');
     _connectedEndpoints.add(endpointId);
 
     final existing = await isarService.getPeer(endpointId);
@@ -63,7 +59,6 @@ class MeshRepositoryImpl {
   }
 
   Future<void> onPeerDisconnected(String endpointId) async {
-    debugPrint('[MESH] Peer disconnected: $endpointId');
     _connectedEndpoints.remove(endpointId);
 
     final peer = await isarService.getPeer(endpointId);
@@ -98,8 +93,6 @@ class MeshRepositoryImpl {
   // }
   // ---------------------------------------------------------------------------
 
-  /// Sends a `nickname_update` packet to every currently connected peer so
-  /// they immediately reflect the local user's new display name.
   Future<void> broadcastNicknameUpdate(String nickname) async {
     final trimmed = nickname.trim();
     final packet = jsonEncode({
@@ -115,7 +108,6 @@ class MeshRepositoryImpl {
         debugPrint('[MESH] Failed to send nickname_update to $endpointId: $e');
       }
     }
-    debugPrint('[MESH] Broadcast nickname_update "$trimmed" to ${_connectedEndpoints.length} peer(s)');
   }
 
   Future<void> broadcastMessage(String content) async {
@@ -146,7 +138,6 @@ class MeshRepositoryImpl {
 
     final packetBytes = Uint8List.fromList(utf8.encode(jsonEncode(packetMap)));
 
-    // Persist locally before sending
     final msgEntity = MessageEntity()
       ..messageId = messageId
       ..senderId = senderKey
@@ -160,7 +151,6 @@ class MeshRepositoryImpl {
     await isarService.saveMessage(msgEntity);
     _trackSeenId(messageId);
 
-    // Broadcast to all currently connected peers
     for (final endpointId in _connectedEndpoints) {
       try {
         await connectionManager.sendPayload(endpointId, packetBytes);
@@ -168,7 +158,6 @@ class MeshRepositoryImpl {
         debugPrint('[MESH] Failed to send to $endpointId: $e');
       }
     }
-    debugPrint('[MESH] Broadcast message $messageId to ${_connectedEndpoints.length} peer(s)');
   }
 
   Future<void> onPayloadReceived(String endpointId, Uint8List payload) async {
@@ -176,10 +165,7 @@ class MeshRepositoryImpl {
       final jsonString = utf8.decode(payload);
       final packet = jsonDecode(jsonString);
 
-      if (packet is! Map<String, dynamic>) {
-        debugPrint('[MESH] Ignoring non-object packet from $endpointId');
-        return;
-      }
+      if (packet is! Map<String, dynamic>) return;
 
       if (packet.containsKey('d')) {
         await _handleMessagePacket(packet, endpointId);
@@ -199,7 +185,6 @@ class MeshRepositoryImpl {
     Map<String, dynamic> packet,
     String fromEndpointId,
   ) async {
-    // Validate top-level structure before casting
     final rawData = packet['d'];
     final rawTransport = packet['t'];
     final rawSignature = packet['s'];
@@ -215,7 +200,6 @@ class MeshRepositoryImpl {
     final transport = rawTransport;
     final signature = rawSignature;
 
-    // Validate data fields
     final messageId = data['id'];
     final senderKey = data['sender'];
     final payloadContent = data['payload'];
@@ -233,10 +217,8 @@ class MeshRepositoryImpl {
       return;
     }
 
-    // Deduplicate
     if (_seenMessageIds.contains(messageId)) return;
 
-    // Verify signature before accepting the message
     final dataJson = jsonEncode(data);
     final dataBytes = utf8.encode(dataJson);
 
@@ -259,7 +241,6 @@ class MeshRepositoryImpl {
     // Only track after verification passes
     _trackSeenId(messageId);
 
-    // Save to local DB
     final msgEntity = MessageEntity()
       ..messageId = messageId
       ..senderId = senderKey
@@ -272,7 +253,6 @@ class MeshRepositoryImpl {
 
     await isarService.saveMessage(msgEntity);
 
-    // Relay to other connected peers if TTL allows
     if (ttl > 0 && targetKey == 'BROADCAST') {
       final newTransport = Map<String, dynamic>.from(transport);
       newTransport['ttl'] = ttl - 1;
@@ -288,7 +268,6 @@ class MeshRepositoryImpl {
           debugPrint('[MESH] Relay to $endpointId failed: $e');
         }
       }
-      debugPrint('[MESH] Relayed message $messageId (TTL ${ttl - 1})');
     }
   }
 
@@ -302,10 +281,8 @@ class MeshRepositoryImpl {
       return;
     }
 
-    // Reject self-connections: the device can discover its own advertisement
-    // in P2P_CLUSTER mode. If the incoming public key is ours, disconnect and bail.
-    // Also delete the stub peer record saved by onConnectionEstablished() so no
-    // ghost card remains in the database.
+    // Reject self-connections: P2P_CLUSTER mode can discover the device's own
+    // advertisement. Disconnect and clean up the stub peer record.
     final myPublicKey = await keyManager.publicKeyBase64;
     if (publicKey == myPublicKey) {
       debugPrint('[MESH] Ignoring self-connection from $endpointId');
@@ -321,15 +298,13 @@ class MeshRepositoryImpl {
         : null;
 
     // Look up whether we already have a record for this public key — either
-    // from an earlier session (historical) or a duplicate connection within
-    // the current session (both sides simultaneously initiated a connection).
+    // from an earlier session or a duplicate connection within the current one.
     final knownPeer = await isarService.getPeerByPublicKey(publicKey);
 
     if (knownPeer != null && knownPeer.deviceId != endpointId) {
-      // The same physical device is reconnecting under a new endpoint ID.
-      // Delete the empty stub created by onConnectionEstablished() for the
-      // new endpoint, then update the existing record in-place so historical
-      // data — crucially the stored nickname — is preserved.
+      // Same physical device reconnecting under a new endpoint ID.
+      // Delete the stub for the new endpoint and update the existing record
+      // in-place so historical data (nickname) is preserved.
       await isarService.deletePeer(endpointId);
 
       // Close the stale endpoint only if it is still active in this session.
@@ -345,13 +320,9 @@ class MeshRepositoryImpl {
       knownPeer.deviceId = endpointId;
       knownPeer.isConnected = true;
       knownPeer.lastSeen = DateTime.now().millisecondsSinceEpoch;
-      // Prefer the nickname from the handshake; fall back to the stored one.
       if (nickname != null) knownPeer.nickname = nickname;
       await isarService.savePeer(knownPeer);
-      debugPrint('[MESH] Handshake complete with $endpointId (known peer, nickname: ${knownPeer.nickname})');
     } else {
-      // Genuinely new peer — update the stub record created by
-      // onConnectionEstablished() with the public key and nickname.
       final stub = await isarService.getPeer(endpointId);
       if (stub != null) {
         stub.publicKey = publicKey;
@@ -367,7 +338,6 @@ class MeshRepositoryImpl {
           ..isConnected = true;
         await isarService.savePeer(peer);
       }
-      debugPrint('[MESH] Handshake complete with $endpointId (new peer, nickname: $nickname)');
     }
   }
 
@@ -382,18 +352,13 @@ class MeshRepositoryImpl {
     }
 
     final peer = await isarService.getPeer(fromEndpointId);
-    if (peer == null) {
-      debugPrint('[MESH] Received nickname_update from unknown peer $fromEndpointId');
-      return;
-    }
+    if (peer == null) return;
 
     final nickname = rawNickname.trim();
     peer.nickname = nickname.isNotEmpty ? nickname : null;
     await isarService.savePeer(peer);
-    debugPrint('[MESH] Updated nickname for $fromEndpointId to "$nickname"');
   }
 
-  // Adds [id] to the seen-IDs set, evicting the oldest entry if at capacity.
   void _trackSeenId(String id) {
     if (_seenMessageIds.length >= _kMaxSeenIds) {
       _seenMessageIds.remove(_seenMessageIds.first);

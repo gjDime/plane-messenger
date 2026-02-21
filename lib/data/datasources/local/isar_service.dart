@@ -17,12 +17,10 @@ class IsarService {
       return Isar.open(
         [MessageEntitySchema, PeerEntitySchema],
         directory: dir.path,
-        // Only enable the Isar Inspector in debug builds
         inspector: kDebugMode,
       );
     }
 
-    // Return the existing instance; re-open if it was somehow closed
     final existing = Isar.getInstance();
     if (existing != null) return existing;
 
@@ -68,7 +66,6 @@ class IsarService {
     return isar.peerEntitys.filter().publicKeyEqualTo(publicKey).findFirst();
   }
 
-  /// Deletes the peer record identified by [deviceId].
   Future<void> deletePeer(String deviceId) async {
     final isar = await db;
     await isar.writeTxn(() async {
@@ -81,11 +78,9 @@ class IsarService {
     yield* isar.peerEntitys.where().watch(fireImmediately: true);
   }
 
-  /// Marks every stored peer as disconnected without deleting the records.
-  /// Called on startup so stale [isConnected] flags from the previous session
-  /// are cleared while historical data (public key, nickname) is preserved.
-  /// When a known device reconnects, [_handleHandshake] matches it by public
-  /// key and reuses the existing record in-place.
+  /// Marks every stored peer as disconnected without deleting records.
+  /// Called on startup to clear stale [isConnected] flags while preserving
+  /// historical data (public key, nickname) for returning devices.
   Future<void> resetConnectionStatus() async {
     final isar = await db;
     await isar.writeTxn(() async {

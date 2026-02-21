@@ -1,7 +1,5 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-/// Stores lightweight user preferences using the platform secure keystore.
-/// Currently only manages the user's display nickname.
 class UserPrefs {
   static final _storage = const FlutterSecureStorage();
   static const _nicknameKey = 'user_nickname';

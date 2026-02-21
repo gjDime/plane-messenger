@@ -9,7 +9,6 @@ class KeyManager {
   static final _storage = const FlutterSecureStorage();
   static const _privateKeyKey = 'ed25519_private_key';
 
-  // Cache the algorithm to avoid repeated instantiation
   static final _algorithm = Ed25519();
 
   final SimpleKeyPair? _cachedKeyPair;
@@ -40,7 +39,6 @@ class KeyManager {
       }
     }
 
-    // Generate a new key pair and persist its private bytes
     final keyPair = await _algorithm.newKeyPair();
     final privateKeyBytes = await keyPair.extractPrivateKeyBytes();
     await _storage.write(

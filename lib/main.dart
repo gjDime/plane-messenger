@@ -17,20 +17,13 @@ void main() async {
   String? initError;
 
   try {
-    debugPrint('[INIT] Starting app initialization...');
-
-    // Step 1: Request permissions
-    debugPrint('[INIT] Requesting permissions...');
     final permissionsGranted = await _requestPermissions();
     if (!permissionsGranted) {
       throw Exception(
         'Required permissions not granted. Please enable Location and Bluetooth permissions.',
       );
     }
-    debugPrint('[INIT] ✓ Permissions granted');
 
-    // Step 2: Initialize Isar database
-    debugPrint('[INIT] Initializing Isar database...');
     final isarService = IsarService();
     await isarService.openDB();
     // Reset connection flags from the previous session. Records are kept so
@@ -38,17 +31,10 @@ void main() async {
     // nicknames are preserved across restarts.
     await isarService.resetConnectionStatus();
     getIt.registerSingleton<IsarService>(isarService);
-    debugPrint('[INIT] ✓ Isar database initialized');
 
-    // Step 3: Initialize KeyManager
-    debugPrint('[INIT] Initializing KeyManager...');
     final keyManager = await KeyManager.instance;
     getIt.registerSingleton<KeyManager>(keyManager);
-    debugPrint('[INIT] ✓ KeyManager initialized');
 
-    // Step 4: Initialize ConnectionManager
-    debugPrint('[INIT] Initializing ConnectionManager...');
-    // Use the stored nickname; fall back to a short public-key prefix if unset
     const int kUserNameLength = 8;
     final storedNickname = await UserPrefs.getNickname();
     final displayName = (storedNickname != null && storedNickname.isNotEmpty)
@@ -57,46 +43,30 @@ void main() async {
     final connectionManager = ConnectionManager(
       userName: displayName,
       onConnectionInitiated: (id, info) {
-        // Auto-accept for MVP
-        debugPrint('[P2P] Connection initiated with $id');
         getIt<ConnectionManager>().acceptConnection(id);
       },
       onConnectionResult: (id) {
-        debugPrint('[P2P] Connected to $id');
         getIt<MeshRepositoryImpl>().onConnectionEstablished(id);
       },
       onDisconnected: (id) {
-        debugPrint('[P2P] Disconnected from $id');
         getIt<MeshRepositoryImpl>().onPeerDisconnected(id);
       },
       onPayloadReceived: (id, payload) {
-        debugPrint('[P2P] Payload received from $id');
         getIt<MeshRepositoryImpl>().onPayloadReceived(id, payload);
       },
     );
     getIt.registerSingleton<ConnectionManager>(connectionManager);
-    debugPrint('[INIT] ✓ ConnectionManager initialized');
 
-    // Step 5: Initialize MeshRepository
-    debugPrint('[INIT] Initializing MeshRepository...');
     final meshRepo = MeshRepositoryImpl(
       connectionManager: connectionManager,
       isarService: isarService,
       keyManager: keyManager,
     );
-
-    // Start Mesh (advertising and discovery)
-    debugPrint('[INIT] Starting mesh network...');
     await meshRepo.initialize();
     getIt.registerSingleton<MeshRepositoryImpl>(meshRepo);
-    debugPrint('[INIT] ✓ MeshRepository initialized');
-
-    debugPrint('[INIT] ✓✓✓ All initialization complete! ✓✓✓');
   } catch (e, stackTrace) {
     initError = e.toString();
-    debugPrint('[INIT] ✗✗✗ Initialization FAILED ✗✗✗');
-    debugPrint('[INIT] Error: $e');
-    debugPrint('[INIT] Stack trace:\n$stackTrace');
+    debugPrint('[INIT] Error: $e\n$stackTrace');
   }
 
   runApp(MyApp(initError: initError));
@@ -124,10 +94,7 @@ Future<bool> _requestPermissions() async {
 
   for (final permission in criticalPermissions) {
     final status = statuses[permission];
-    debugPrint('[PERMISSIONS] $permission: $status');
-
     if (status == null || (!status.isGranted && !status.isLimited)) {
-      debugPrint('[PERMISSIONS] Critical permission $permission not granted!');
       return false;
     }
   }
@@ -152,11 +119,7 @@ class MyApp extends StatelessWidget {
           ? ErrorPage(
               error: initError!,
               onRetry: () {
-                // Restart the app by popping all routes and rebuilding
-                debugPrint('[RETRY] User requested retry, restarting app...');
-                // For a full restart, we'd need to use a package like restart_app
-                // For now, show a message
-                debugPrint('[RETRY] Please restart the app manually to retry.');
+                // TODO: use a package like restart_app for a full restart
               },
             )
           : const RadarPage(),

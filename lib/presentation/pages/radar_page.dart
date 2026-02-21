@@ -167,12 +167,6 @@ class _RadarPageState extends State<RadarPage> {
   }
 }
 
-/// Dialog for editing the user's display nickname.
-///
-/// Owns its [TextEditingController] so the framework disposes it at the correct
-/// point during the pop animation — preventing the _dependents.isEmpty assertion
-/// that fires when the controller is disposed externally while the [TextField]
-/// is still mounted and rendering.
 class _NicknameDialog extends StatefulWidget {
   const _NicknameDialog({required this.initialValue});
 
