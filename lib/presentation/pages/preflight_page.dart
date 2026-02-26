@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:plane_messenger/main.dart';
 import 'package:plane_messenger/presentation/pages/error_page.dart';
 import 'package:plane_messenger/presentation/pages/radar_page.dart';
 
 /// Checks that all required permissions are granted and hardware services
-/// (Location, Bluetooth) are enabled before initializing the mesh layer.
+/// (Location, Bluetooth, Wi-Fi) are enabled before initializing the mesh layer.
 ///
-/// Shows a dialog for each missing requirement and re-checks when the user
-/// returns from settings or taps "Retry".
+/// Shows a dialog for each missing requirement with a button to open the
+/// relevant system settings page. Nothing is enabled automatically.
 class PreflightPage extends StatefulWidget {
   const PreflightPage({super.key});
 
@@ -18,7 +19,10 @@ class PreflightPage extends StatefulWidget {
 
 class _PreflightPageState extends State<PreflightPage>
     with WidgetsBindingObserver {
-  /// True while the user is in the system Settings app.
+  static const _systemChannel = MethodChannel('com.plane.messenger/system');
+
+  /// True while the user is in a system settings screen so that we re-run the
+  /// preflight check when they return to the app.
   bool _awaitingReturn = false;
 
   @override
@@ -47,23 +51,30 @@ class _PreflightPageState extends State<PreflightPage>
   // ---------------------------------------------------------------------------
 
   Future<void> _runPreflight() async {
-    if (!await _ensurePermissions()) {
-      return;
-    }
+    if (!await _ensurePermissions()) return;
+
     if (!await _ensureServiceEnabled(
-      Permission.location,
-      'Location',
-      'Peer discovery requires Location services (GPS).',
-    )) {
-      return;
-    }
+      name: 'Location',
+      reason:
+          'Location services must be enabled for peer discovery to work.',
+      isEnabled: () => Permission.location.serviceStatus.isEnabled,
+      openSettings: () => _systemChannel.invokeMethod('openLocationSettings'),
+    )) { return; }
+
     if (!await _ensureServiceEnabled(
-      Permission.bluetooth,
-      'Bluetooth',
-      'Bluetooth is needed to connect with nearby devices.',
-    )) {
-      return;
-    }
+      name: 'Bluetooth',
+      reason:
+          'Bluetooth is needed to discover and connect with nearby devices.',
+      isEnabled: () => Permission.bluetooth.serviceStatus.isEnabled,
+      openSettings: () => _systemChannel.invokeMethod('openBluetoothSettings'),
+    )) { return; }
+
+    if (!await _ensureServiceEnabled(
+      name: 'Wi-Fi',
+      reason: 'Wi-Fi is required for high-speed mesh communication.',
+      isEnabled: _isWifiEnabled,
+      openSettings: () => _systemChannel.invokeMethod('openWifiSettings'),
+    )) { return; }
 
     if (!mounted) return;
     try {
@@ -124,7 +135,7 @@ class _PreflightPageState extends State<PreflightPage>
           'Please grant them in Settings.',
         ),
         actions: [
-          TextButton(
+          FilledButton(
             onPressed: () {
               Navigator.pop(ctx);
               _awaitingReturn = true;
@@ -139,33 +150,51 @@ class _PreflightPageState extends State<PreflightPage>
   }
 
   // ---------------------------------------------------------------------------
-  // Hardware services (Location / Bluetooth)
+  // Hardware services (Location / Bluetooth / Wi-Fi)
   // ---------------------------------------------------------------------------
 
-  Future<bool> _ensureServiceEnabled(
-    PermissionWithService permission,
-    String name,
-    String reason,
-  ) async {
-    while (mounted && !await permission.serviceStatus.isEnabled) {
-      if (!mounted) return false;
-      final retry = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => AlertDialog(
-          title: Text('Enable $name'),
-          content: Text(reason),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Retry'),
-            ),
-          ],
-        ),
-      );
-      if (retry != true) return false;
+  Future<bool> _isWifiEnabled() async {
+    try {
+      return await _systemChannel.invokeMethod<bool>('isWifiEnabled') ?? true;
+    } catch (_) {
+      // If the check fails (e.g. platform not supported), assume enabled.
+      return true;
     }
-    return true;
+  }
+
+  /// Shows a dialog prompting the user to enable [name] if it is currently off.
+  ///
+  /// The dialog has a single "Turn On [name]" button that opens the relevant
+  /// system settings screen. Nothing is toggled automatically.
+  /// Returns `true` if the service is already enabled, `false` otherwise.
+  Future<bool> _ensureServiceEnabled({
+    required String name,
+    required String reason,
+    required Future<bool> Function() isEnabled,
+    required Future<void> Function() openSettings,
+  }) async {
+    if (await isEnabled()) return true;
+    if (!mounted) return false;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Text('$name is Off'),
+        content: Text(reason),
+        actions: [
+          FilledButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              _awaitingReturn = true;
+              await openSettings();
+            },
+            child: Text('Turn On $name'),
+          ),
+        ],
+      ),
+    );
+    return false;
   }
 
   // ---------------------------------------------------------------------------

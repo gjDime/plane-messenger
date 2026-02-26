@@ -28,6 +28,7 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     _loadMyPublicKey();
+    _isarService.markPeerAsRead(widget.peer.deviceId);
   }
 
   Future<void> _loadMyPublicKey() async {
@@ -131,9 +132,36 @@ class _ChatPageState extends State<ChatPage> {
                 '${isEncrypted ? ' | E2EE' : ''}',
                 style: const TextStyle(fontSize: 10, color: Colors.black54),
               ),
+            if (isMe) _buildDeliveryStatusRow(msg),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildDeliveryStatusRow(MessageEntity msg) {
+    final status = msg.status;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const SizedBox(height: 20),
+        if (status == DeliveryStatus.sending)
+          const SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(strokeWidth: 1.5),
+          ),
+        if (status == DeliveryStatus.sent)
+          const Icon(Icons.check, size: 14, color: Colors.grey),
+        if (status == DeliveryStatus.failed) ...[
+          const Icon(Icons.error_outline, size: 14, color: Colors.red),
+          const SizedBox(width: 4),
+          InkWell(
+            onTap: () => _meshRepo.resendFailedMessage(msg),
+            child: const Icon(Icons.refresh, size: 14, color: Colors.red),
+          ),
+        ],
+      ],
     );
   }
 

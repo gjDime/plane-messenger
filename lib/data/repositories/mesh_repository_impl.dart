@@ -188,6 +188,20 @@ class MeshRepositoryImpl {
         debugPrint('[MESH] Failed to derive shared secret with $endpointId: $e');
       }
     }
+
+    // Auto-resend any previously failed messages to this peer
+    final myPubKey = await keyManager.publicKeyBase64;
+    final failedMessages = await isarService.getFailedMessagesForPeer(
+      publicKey,
+      myPubKey,
+    );
+    for (final msg in failedMessages) {
+      try {
+        await resendFailedMessage(msg);
+      } catch (e) {
+        debugPrint('[MESH] Auto-resend failed for ${msg.messageId}: $e');
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -273,11 +287,16 @@ class MeshRepositoryImpl {
       ..timestamp = timestamp
       ..signature = ''
       ..ttl = _kDefaultTtl
-      ..isMine = true;
+      ..isMine = true
+      ..deliveryStatus = DeliveryStatus.sending.index;
 
     await isarService.saveMessage(msgEntity);
     _trackSeenId(messageId);
-    await _floodToEndpoints(packetBytes);
+    final success = await _floodToEndpoints(packetBytes);
+    await isarService.updateMessageStatus(
+      messageId,
+      success ? DeliveryStatus.sent.index : DeliveryStatus.failed.index,
+    );
   }
 
   /// Sends an E2EE direct message to a specific peer.
@@ -339,11 +358,16 @@ class MeshRepositoryImpl {
       ..timestamp = timestamp
       ..signature = ''
       ..ttl = _kDefaultTtl
-      ..isMine = true;
+      ..isMine = true
+      ..deliveryStatus = DeliveryStatus.sending.index;
 
     await isarService.saveMessage(msgEntity);
     _trackSeenId(messageId);
-    await _floodToEndpoints(packetBytes);
+    final success = await _floodToEndpoints(packetBytes);
+    await isarService.updateMessageStatus(
+      messageId,
+      success ? DeliveryStatus.sent.index : DeliveryStatus.failed.index,
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -515,6 +539,80 @@ class MeshRepositoryImpl {
   }
 
   // ---------------------------------------------------------------------------
+  // Resend
+  // ---------------------------------------------------------------------------
+
+  /// Re-sends a previously failed message. Re-encrypts, re-signs, and floods.
+  Future<void> resendFailedMessage(MessageEntity msg) async {
+    await isarService.updateMessageStatus(
+      msg.messageId,
+      DeliveryStatus.sending.index,
+    );
+
+    try {
+      final senderKey = await keyManager.publicKeyBase64;
+      final isBroadcast = msg.targetId == 'BROADCAST';
+
+      Map<String, dynamic> dataMap;
+      Map<String, dynamic> transport;
+
+      if (isBroadcast) {
+        dataMap = {
+          'id': msg.messageId,
+          'sender': senderKey,
+          'ts': msg.timestamp,
+          'payload': msg.payload,
+        };
+        transport = {'ttl': _kDefaultTtl, 'target': 'BROADCAST'};
+      } else {
+        // Re-derive shared secret if needed
+        final ready = cryptoService.hasSharedSecret(msg.targetId) ||
+            await cryptoService.tryEstablishSharedSecret(
+              msg.targetId,
+              isarService,
+            );
+        if (!ready) {
+          debugPrint('[MESH] Resend failed: no X25519 key for ${msg.targetId.substring(0, 8)}…');
+          await isarService.updateMessageStatus(
+            msg.messageId,
+            DeliveryStatus.failed.index,
+          );
+          return;
+        }
+
+        final encrypted = await cryptoService.encryptForPeer(
+          msg.targetId,
+          msg.payload,
+        );
+
+        dataMap = {
+          'id': msg.messageId,
+          'sender': senderKey,
+          'ts': msg.timestamp,
+          'payload': encrypted.ciphertextBase64,
+          'nonce': encrypted.nonceBase64,
+          'mac': encrypted.macBase64,
+          'enc': true,
+        };
+        transport = {'ttl': _kDefaultTtl, 'target': msg.targetId};
+      }
+
+      final packetBytes = await _signAndEncode(dataMap, transport: transport);
+      final success = await _floodToEndpoints(packetBytes);
+      await isarService.updateMessageStatus(
+        msg.messageId,
+        success ? DeliveryStatus.sent.index : DeliveryStatus.failed.index,
+      );
+    } catch (e) {
+      debugPrint('[MESH] Resend error for ${msg.messageId}: $e');
+      await isarService.updateMessageStatus(
+        msg.messageId,
+        DeliveryStatus.failed.index,
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
 
@@ -583,14 +681,19 @@ class MeshRepositoryImpl {
   }
 
   /// Sends [packetBytes] to every connected endpoint.
-  Future<void> _floodToEndpoints(Uint8List packetBytes) async {
+  /// Returns `true` if at least one send succeeded, `false` otherwise.
+  Future<bool> _floodToEndpoints(Uint8List packetBytes) async {
+    if (_connectedEndpoints.isEmpty) return false;
+    bool anySuccess = false;
     for (final endpointId in _connectedEndpoints) {
       try {
         await connectionManager.sendPayload(endpointId, packetBytes);
+        anySuccess = true;
       } catch (e) {
         debugPrint('[MESH] Failed to send to $endpointId: $e');
       }
     }
+    return anySuccess;
   }
 
   void _trackSeenId(String id) {

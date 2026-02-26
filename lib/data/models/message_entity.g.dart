@@ -17,43 +17,48 @@ const MessageEntitySchema = CollectionSchema(
   name: r'MessageEntity',
   id: 2569526783852321106,
   properties: {
-    r'isMine': PropertySchema(
+    r'deliveryStatus': PropertySchema(
       id: 0,
+      name: r'deliveryStatus',
+      type: IsarType.long,
+    ),
+    r'isMine': PropertySchema(
+      id: 1,
       name: r'isMine',
       type: IsarType.bool,
     ),
     r'messageId': PropertySchema(
-      id: 1,
+      id: 2,
       name: r'messageId',
       type: IsarType.string,
     ),
     r'payload': PropertySchema(
-      id: 2,
+      id: 3,
       name: r'payload',
       type: IsarType.string,
     ),
     r'senderId': PropertySchema(
-      id: 3,
+      id: 4,
       name: r'senderId',
       type: IsarType.string,
     ),
     r'signature': PropertySchema(
-      id: 4,
+      id: 5,
       name: r'signature',
       type: IsarType.string,
     ),
     r'targetId': PropertySchema(
-      id: 5,
+      id: 6,
       name: r'targetId',
       type: IsarType.string,
     ),
     r'timestamp': PropertySchema(
-      id: 6,
+      id: 7,
       name: r'timestamp',
       type: IsarType.long,
     ),
     r'ttl': PropertySchema(
-      id: 7,
+      id: 8,
       name: r'ttl',
       type: IsarType.long,
     )
@@ -106,14 +111,15 @@ void _messageEntitySerialize(
   List<int> offsets,
   Map<Type, List<int>> allOffsets,
 ) {
-  writer.writeBool(offsets[0], object.isMine);
-  writer.writeString(offsets[1], object.messageId);
-  writer.writeString(offsets[2], object.payload);
-  writer.writeString(offsets[3], object.senderId);
-  writer.writeString(offsets[4], object.signature);
-  writer.writeString(offsets[5], object.targetId);
-  writer.writeLong(offsets[6], object.timestamp);
-  writer.writeLong(offsets[7], object.ttl);
+  writer.writeLong(offsets[0], object.deliveryStatus);
+  writer.writeBool(offsets[1], object.isMine);
+  writer.writeString(offsets[2], object.messageId);
+  writer.writeString(offsets[3], object.payload);
+  writer.writeString(offsets[4], object.senderId);
+  writer.writeString(offsets[5], object.signature);
+  writer.writeString(offsets[6], object.targetId);
+  writer.writeLong(offsets[7], object.timestamp);
+  writer.writeLong(offsets[8], object.ttl);
 }
 
 MessageEntity _messageEntityDeserialize(
@@ -123,15 +129,16 @@ MessageEntity _messageEntityDeserialize(
   Map<Type, List<int>> allOffsets,
 ) {
   final object = MessageEntity();
+  object.deliveryStatus = reader.readLong(offsets[0]);
   object.id = id;
-  object.isMine = reader.readBool(offsets[0]);
-  object.messageId = reader.readString(offsets[1]);
-  object.payload = reader.readString(offsets[2]);
-  object.senderId = reader.readString(offsets[3]);
-  object.signature = reader.readString(offsets[4]);
-  object.targetId = reader.readString(offsets[5]);
-  object.timestamp = reader.readLong(offsets[6]);
-  object.ttl = reader.readLong(offsets[7]);
+  object.isMine = reader.readBool(offsets[1]);
+  object.messageId = reader.readString(offsets[2]);
+  object.payload = reader.readString(offsets[3]);
+  object.senderId = reader.readString(offsets[4]);
+  object.signature = reader.readString(offsets[5]);
+  object.targetId = reader.readString(offsets[6]);
+  object.timestamp = reader.readLong(offsets[7]);
+  object.ttl = reader.readLong(offsets[8]);
   return object;
 }
 
@@ -143,9 +150,9 @@ P _messageEntityDeserializeProp<P>(
 ) {
   switch (propertyId) {
     case 0:
-      return (reader.readBool(offset)) as P;
+      return (reader.readLong(offset)) as P;
     case 1:
-      return (reader.readString(offset)) as P;
+      return (reader.readBool(offset)) as P;
     case 2:
       return (reader.readString(offset)) as P;
     case 3:
@@ -155,8 +162,10 @@ P _messageEntityDeserializeProp<P>(
     case 5:
       return (reader.readString(offset)) as P;
     case 6:
-      return (reader.readLong(offset)) as P;
+      return (reader.readString(offset)) as P;
     case 7:
+      return (reader.readLong(offset)) as P;
+    case 8:
       return (reader.readLong(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
@@ -408,6 +417,62 @@ extension MessageEntityQueryWhere
 
 extension MessageEntityQueryFilter
     on QueryBuilder<MessageEntity, MessageEntity, QFilterCondition> {
+  QueryBuilder<MessageEntity, MessageEntity, QAfterFilterCondition>
+      deliveryStatusEqualTo(int value) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'deliveryStatus',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<MessageEntity, MessageEntity, QAfterFilterCondition>
+      deliveryStatusGreaterThan(
+    int value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'deliveryStatus',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<MessageEntity, MessageEntity, QAfterFilterCondition>
+      deliveryStatusLessThan(
+    int value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'deliveryStatus',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<MessageEntity, MessageEntity, QAfterFilterCondition>
+      deliveryStatusBetween(
+    int lower,
+    int upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'deliveryStatus',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+      ));
+    });
+  }
+
   QueryBuilder<MessageEntity, MessageEntity, QAfterFilterCondition> idEqualTo(
       Id value) {
     return QueryBuilder.apply(this, (query) {
@@ -1271,6 +1336,20 @@ extension MessageEntityQueryLinks
 
 extension MessageEntityQuerySortBy
     on QueryBuilder<MessageEntity, MessageEntity, QSortBy> {
+  QueryBuilder<MessageEntity, MessageEntity, QAfterSortBy>
+      sortByDeliveryStatus() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'deliveryStatus', Sort.asc);
+    });
+  }
+
+  QueryBuilder<MessageEntity, MessageEntity, QAfterSortBy>
+      sortByDeliveryStatusDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'deliveryStatus', Sort.desc);
+    });
+  }
+
   QueryBuilder<MessageEntity, MessageEntity, QAfterSortBy> sortByIsMine() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'isMine', Sort.asc);
@@ -1375,6 +1454,20 @@ extension MessageEntityQuerySortBy
 
 extension MessageEntityQuerySortThenBy
     on QueryBuilder<MessageEntity, MessageEntity, QSortThenBy> {
+  QueryBuilder<MessageEntity, MessageEntity, QAfterSortBy>
+      thenByDeliveryStatus() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'deliveryStatus', Sort.asc);
+    });
+  }
+
+  QueryBuilder<MessageEntity, MessageEntity, QAfterSortBy>
+      thenByDeliveryStatusDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'deliveryStatus', Sort.desc);
+    });
+  }
+
   QueryBuilder<MessageEntity, MessageEntity, QAfterSortBy> thenById() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'id', Sort.asc);
@@ -1491,6 +1584,13 @@ extension MessageEntityQuerySortThenBy
 
 extension MessageEntityQueryWhereDistinct
     on QueryBuilder<MessageEntity, MessageEntity, QDistinct> {
+  QueryBuilder<MessageEntity, MessageEntity, QDistinct>
+      distinctByDeliveryStatus() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'deliveryStatus');
+    });
+  }
+
   QueryBuilder<MessageEntity, MessageEntity, QDistinct> distinctByIsMine() {
     return QueryBuilder.apply(this, (query) {
       return query.addDistinctBy(r'isMine');
@@ -1550,6 +1650,12 @@ extension MessageEntityQueryProperty
   QueryBuilder<MessageEntity, int, QQueryOperations> idProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'id');
+    });
+  }
+
+  QueryBuilder<MessageEntity, int, QQueryOperations> deliveryStatusProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'deliveryStatus');
     });
   }
 

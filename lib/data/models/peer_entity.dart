@@ -19,4 +19,6 @@ class PeerEntity {
   bool isConnected = false; // True while an active Nearby Connections session exists
 
   String? nickname; // Optional user-facing display name
+
+  int lastReadTimestamp = 0; // Epoch ms; messages after this are "unread"
 }

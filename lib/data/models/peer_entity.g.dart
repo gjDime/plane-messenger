@@ -27,23 +27,28 @@ const PeerEntitySchema = CollectionSchema(
       name: r'isConnected',
       type: IsarType.bool,
     ),
-    r'lastSeen': PropertySchema(
+    r'lastReadTimestamp': PropertySchema(
       id: 2,
+      name: r'lastReadTimestamp',
+      type: IsarType.long,
+    ),
+    r'lastSeen': PropertySchema(
+      id: 3,
       name: r'lastSeen',
       type: IsarType.long,
     ),
     r'nickname': PropertySchema(
-      id: 3,
+      id: 4,
       name: r'nickname',
       type: IsarType.string,
     ),
     r'publicKey': PropertySchema(
-      id: 4,
+      id: 5,
       name: r'publicKey',
       type: IsarType.string,
     ),
     r'x25519PublicKey': PropertySchema(
-      id: 5,
+      id: 6,
       name: r'x25519PublicKey',
       type: IsarType.string,
     )
@@ -102,10 +107,11 @@ void _peerEntitySerialize(
 ) {
   writer.writeString(offsets[0], object.deviceId);
   writer.writeBool(offsets[1], object.isConnected);
-  writer.writeLong(offsets[2], object.lastSeen);
-  writer.writeString(offsets[3], object.nickname);
-  writer.writeString(offsets[4], object.publicKey);
-  writer.writeString(offsets[5], object.x25519PublicKey);
+  writer.writeLong(offsets[2], object.lastReadTimestamp);
+  writer.writeLong(offsets[3], object.lastSeen);
+  writer.writeString(offsets[4], object.nickname);
+  writer.writeString(offsets[5], object.publicKey);
+  writer.writeString(offsets[6], object.x25519PublicKey);
 }
 
 PeerEntity _peerEntityDeserialize(
@@ -118,10 +124,11 @@ PeerEntity _peerEntityDeserialize(
   object.deviceId = reader.readString(offsets[0]);
   object.id = id;
   object.isConnected = reader.readBool(offsets[1]);
-  object.lastSeen = reader.readLong(offsets[2]);
-  object.nickname = reader.readStringOrNull(offsets[3]);
-  object.publicKey = reader.readString(offsets[4]);
-  object.x25519PublicKey = reader.readString(offsets[5]);
+  object.lastReadTimestamp = reader.readLong(offsets[2]);
+  object.lastSeen = reader.readLong(offsets[3]);
+  object.nickname = reader.readStringOrNull(offsets[4]);
+  object.publicKey = reader.readString(offsets[5]);
+  object.x25519PublicKey = reader.readString(offsets[6]);
   return object;
 }
 
@@ -139,10 +146,12 @@ P _peerEntityDeserializeProp<P>(
     case 2:
       return (reader.readLong(offset)) as P;
     case 3:
-      return (reader.readStringOrNull(offset)) as P;
+      return (reader.readLong(offset)) as P;
     case 4:
-      return (reader.readString(offset)) as P;
+      return (reader.readStringOrNull(offset)) as P;
     case 5:
+      return (reader.readString(offset)) as P;
+    case 6:
       return (reader.readString(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
@@ -533,6 +542,62 @@ extension PeerEntityQueryFilter
       return query.addFilterCondition(FilterCondition.equalTo(
         property: r'isConnected',
         value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterFilterCondition>
+      lastReadTimestampEqualTo(int value) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'lastReadTimestamp',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterFilterCondition>
+      lastReadTimestampGreaterThan(
+    int value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'lastReadTimestamp',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterFilterCondition>
+      lastReadTimestampLessThan(
+    int value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'lastReadTimestamp',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterFilterCondition>
+      lastReadTimestampBetween(
+    int lower,
+    int upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'lastReadTimestamp',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
       ));
     });
   }
@@ -1045,6 +1110,19 @@ extension PeerEntityQuerySortBy
     });
   }
 
+  QueryBuilder<PeerEntity, PeerEntity, QAfterSortBy> sortByLastReadTimestamp() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'lastReadTimestamp', Sort.asc);
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterSortBy>
+      sortByLastReadTimestampDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'lastReadTimestamp', Sort.desc);
+    });
+  }
+
   QueryBuilder<PeerEntity, PeerEntity, QAfterSortBy> sortByLastSeen() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'lastSeen', Sort.asc);
@@ -1133,6 +1211,19 @@ extension PeerEntityQuerySortThenBy
     });
   }
 
+  QueryBuilder<PeerEntity, PeerEntity, QAfterSortBy> thenByLastReadTimestamp() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'lastReadTimestamp', Sort.asc);
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterSortBy>
+      thenByLastReadTimestampDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'lastReadTimestamp', Sort.desc);
+    });
+  }
+
   QueryBuilder<PeerEntity, PeerEntity, QAfterSortBy> thenByLastSeen() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'lastSeen', Sort.asc);
@@ -1198,6 +1289,13 @@ extension PeerEntityQueryWhereDistinct
     });
   }
 
+  QueryBuilder<PeerEntity, PeerEntity, QDistinct>
+      distinctByLastReadTimestamp() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'lastReadTimestamp');
+    });
+  }
+
   QueryBuilder<PeerEntity, PeerEntity, QDistinct> distinctByLastSeen() {
     return QueryBuilder.apply(this, (query) {
       return query.addDistinctBy(r'lastSeen');
@@ -1244,6 +1342,12 @@ extension PeerEntityQueryProperty
   QueryBuilder<PeerEntity, bool, QQueryOperations> isConnectedProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'isConnected');
+    });
+  }
+
+  QueryBuilder<PeerEntity, int, QQueryOperations> lastReadTimestampProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'lastReadTimestamp');
     });
   }
 

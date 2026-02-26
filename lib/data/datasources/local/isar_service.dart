@@ -67,6 +67,37 @@ class IsarService {
         .watch(fireImmediately: true);
   }
 
+  /// Updates the delivery status of a message identified by [messageId].
+  Future<void> updateMessageStatus(String messageId, int status) async {
+    final isar = await db;
+    await isar.writeTxn(() async {
+      final msg = await isar.messageEntitys
+          .filter()
+          .messageIdEqualTo(messageId)
+          .findFirst();
+      if (msg != null) {
+        msg.deliveryStatus = status;
+        await isar.messageEntitys.put(msg);
+      }
+    });
+  }
+
+  /// Returns all failed outgoing messages for a specific peer, sorted by
+  /// timestamp ascending. Used for auto-resend on reconnection.
+  Future<List<MessageEntity>> getFailedMessagesForPeer(
+    String peerPublicKey,
+    String myPublicKey,
+  ) async {
+    final isar = await db;
+    return isar.messageEntitys
+        .filter()
+        .isMineEqualTo(true)
+        .targetIdEqualTo(peerPublicKey)
+        .deliveryStatusEqualTo(DeliveryStatus.failed.index)
+        .sortByTimestamp()
+        .findAll();
+  }
+
   Future<void> savePeer(PeerEntity peer) async {
     final isar = await db;
     await isar.writeTxn(() async {
@@ -112,6 +143,35 @@ class IsarService {
                 q.senderIdEqualTo(myPublicKey).targetIdEqualTo(peerPublicKey),
           )
           .deleteAll();
+    });
+  }
+
+  /// Watches the number of unread messages from a specific peer.
+  Stream<int> watchUnreadCountForPeer(
+    String peerPublicKey,
+    String myPublicKey,
+    int afterTimestamp,
+  ) async* {
+    final isar = await db;
+    yield* isar.messageEntitys
+        .filter()
+        .senderIdEqualTo(peerPublicKey)
+        .targetIdEqualTo(myPublicKey)
+        .timestampGreaterThan(afterTimestamp)
+        .watch(fireImmediately: true)
+        .map((messages) => messages.length);
+  }
+
+  /// Marks all messages from a peer as read by updating the peer's
+  /// [PeerEntity.lastReadTimestamp] to now.
+  Future<void> markPeerAsRead(String deviceId) async {
+    final isar = await db;
+    final peer =
+        await isar.peerEntitys.filter().deviceIdEqualTo(deviceId).findFirst();
+    if (peer == null) return;
+    peer.lastReadTimestamp = DateTime.now().millisecondsSinceEpoch;
+    await isar.writeTxn(() async {
+      await isar.peerEntitys.put(peer);
     });
   }
 

@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:plane_messenger/core/security/key_manager.dart';
 import 'package:plane_messenger/core/user_prefs.dart';
 import 'package:plane_messenger/data/datasources/local/isar_service.dart';
@@ -39,16 +42,24 @@ class RadarPage extends StatefulWidget {
 
 class _RadarPageState extends State<RadarPage>
     with SingleTickerProviderStateMixin {
+  static const _serviceEvents = EventChannel('com.plane.messenger/service_events');
+  static const _systemChannel = MethodChannel('com.plane.messenger/system');
+
   String? _myNickname;
+  String? _myPublicKey;
   String? _selectedPeerId;
 
   late final AnimationController _wiggleController;
   late final Animation<double> _wiggleAnimation;
 
+  StreamSubscription<dynamic>? _serviceSubscription;
+  bool _isServiceAlertShowing = false;
+
   @override
   void initState() {
     super.initState();
     _loadNickname();
+    _loadMyPublicKey();
     _wiggleController = AnimationController(
       duration: const Duration(milliseconds: 200),
       vsync: this,
@@ -56,17 +67,84 @@ class _RadarPageState extends State<RadarPage>
     _wiggleAnimation = Tween<double>(begin: -0.035, end: 0.035).animate(
       CurvedAnimation(parent: _wiggleController, curve: Curves.easeInOut),
     );
+    _subscribeToServiceEvents();
   }
 
   @override
   void dispose() {
+    _serviceSubscription?.cancel();
     _wiggleController.dispose();
     super.dispose();
+  }
+
+  void _subscribeToServiceEvents() {
+    _serviceSubscription = _serviceEvents.receiveBroadcastStream().listen(
+      (event) {
+        if (mounted) _showServiceDisabledAlert(event as String);
+      },
+    );
+  }
+
+  Future<void> _showServiceDisabledAlert(String event) async {
+    if (_isServiceAlertShowing || !mounted) return;
+
+    final String name;
+    final String reason;
+    final String settingsMethod;
+
+    switch (event) {
+      case 'bluetooth_off':
+        name = 'Bluetooth';
+        reason = 'Bluetooth is essential for SkyMesh to discover and connect with nearby devices.';
+        settingsMethod = 'openBluetoothSettings';
+      case 'wifi_off':
+        name = 'Wi-Fi';
+        reason = 'Wi-Fi is essential for high-speed mesh communication in SkyMesh.';
+        settingsMethod = 'openWifiSettings';
+      case 'location_off':
+        name = 'Location';
+        reason = 'Location services are essential for peer discovery in SkyMesh.';
+        settingsMethod = 'openLocationSettings';
+      default:
+        return;
+    }
+
+    _isServiceAlertShowing = true;
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: true,
+        builder: (ctx) => AlertDialog(
+          title: Text('$name Disabled'),
+          content: Text(reason),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Dismiss'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                _systemChannel.invokeMethod(settingsMethod);
+              },
+              child: Text('Turn On $name'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      _isServiceAlertShowing = false;
+    }
   }
 
   Future<void> _loadNickname() async {
     final nickname = await UserPrefs.getNickname();
     if (mounted) setState(() => _myNickname = nickname);
+  }
+
+  Future<void> _loadMyPublicKey() async {
+    final key = await getIt<KeyManager>().publicKeyBase64;
+    if (mounted) setState(() => _myPublicKey = key);
   }
 
   void _selectPeer(String deviceId) {
@@ -237,6 +315,9 @@ class _RadarPageState extends State<RadarPage>
                           ? peer.deviceId.substring(0, 5)
                           : peer.deviceId);
 
+                  final hasKey =
+                      peer.publicKey.isNotEmpty && _myPublicKey != null;
+
                   Widget card = Card(
                     color: peer.isConnected
                         ? Colors.green.shade100
@@ -247,7 +328,28 @@ class _RadarPageState extends State<RadarPage>
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(_iconForPeer(peer.deviceId), size: 40),
+                              if (hasKey)
+                                StreamBuilder<int>(
+                                  stream:
+                                      isarService.watchUnreadCountForPeer(
+                                        peer.publicKey,
+                                        _myPublicKey!,
+                                        peer.lastReadTimestamp,
+                                      ),
+                                  builder: (context, snap) {
+                                    final count = snap.data ?? 0;
+                                    return Badge(
+                                      isLabelVisible: count > 0,
+                                      label: Text('$count'),
+                                      child: Icon(
+                                        _iconForPeer(peer.deviceId),
+                                        size: 40,
+                                      ),
+                                    );
+                                  },
+                                )
+                              else
+                                Icon(_iconForPeer(peer.deviceId), size: 40),
                               const SizedBox(height: 8),
                               Text(
                                 displayName,
