@@ -122,7 +122,8 @@ Handles runtime permission requests on Android (Location, Bluetooth Advertise/Co
 lib/
 ├── core/
 │   └── security/
-│       └── key_manager.dart        # Ed25519 key generation, signing, verification
+│       ├── key_manager.dart        # Ed25519 + X25519 key generation, signing, ECDH
+│       └── crypto_service.dart     # AES-256-GCM encrypt/decrypt, shared secret cache
 ├── data/
 │   ├── models/
 │   │   ├── message_entity.dart     # Isar collection: mesh messages
@@ -142,3 +143,79 @@ lib/
 ```
 
 The app follows a layered architecture: the **presentation** layer observes reactive streams from the **data** layer; the **core** layer provides cross-cutting concerns (cryptography). There is no network layer — all communication is local and P2P.
+
+---
+
+## End-to-End Encryption (E2EE)
+
+Direct messages between two peers are encrypted end-to-end. Relay nodes forward encrypted packets based on routing metadata but cannot read the payload. Broadcast messages remain plaintext.
+
+### Key Exchange — X25519 ECDH
+
+Each device generates a persistent **X25519** key pair alongside its Ed25519 identity key pair (both managed by `KeyManager`). During the Nearby Connections handshake, peers exchange both their Ed25519 and X25519 public keys:
+
+```json
+{
+  "type": "handshake",
+  "pubKey": "<base64-ed25519-public-key>",
+  "x25519PubKey": "<base64-x25519-public-key>",
+  "nickname": "optional"
+}
+```
+
+`CryptoService` uses the local X25519 private key and the remote peer's X25519 public key to derive a **shared secret** via Elliptic Curve Diffie-Hellman. The shared secret is cached in memory (keyed by the peer's Ed25519 identity key) for the lifetime of the process.
+
+### Symmetric Encryption — AES-256-GCM
+
+Message payloads are encrypted with **AES-256-GCM** using the ECDH-derived shared secret. Each message uses a unique random 12-byte nonce. The cipher produces authenticated ciphertext and a 16-byte MAC tag.
+
+### Encrypted Packet Wire Format
+
+```json
+{
+  "t": { "ttl": 3, "target": "<recipient-ed25519-pubkey>" },
+  "d": {
+    "id": "<uuid>",
+    "sender": "<sender-ed25519-pubkey>",
+    "ts": "<epoch-ms>",
+    "payload": "<base64-ciphertext>",
+    "nonce": "<base64-12-byte-nonce>",
+    "mac": "<base64-16-byte-mac>",
+    "enc": true
+  },
+  "s": "<base64-ed25519-signature-of-d>"
+}
+```
+
+Key design decisions:
+
+- **`enc: true`** distinguishes encrypted DMs from plaintext broadcasts. Absence or `false` means plaintext.
+- **`t.target`** is set to the recipient's Ed25519 public key for routing. Relay nodes inspect this field to determine where to forward but cannot decrypt the payload.
+- **Signature covers `d`** in its encrypted form, so relay nodes can verify authenticity without decrypting.
+- **Relay policy**: all messages with `ttl > 0` are relayed (both broadcasts and DMs), ensuring DMs reach non-adjacent peers through the mesh.
+
+### Trust Model
+
+- **Authentication**: Ed25519 signatures on every message prevent forgery.
+- **Confidentiality**: AES-256-GCM with ECDH-derived keys ensures only the sender and recipient can read DM content.
+- **Relay transparency**: intermediate nodes see `target`, `sender`, `ttl`, and `timestamp` but the payload is opaque ciphertext.
+- **No forward secrecy** (current): static X25519 keys mean the shared secret is deterministic. The `CryptoService` interface is designed so ephemeral per-session keys can be added without changing callers.
+
+### Architecture
+
+```
+┌─────────────┐     derives shared secret     ┌──────────────┐
+│  KeyManager  │──────────────────────────────►│ CryptoService│
+│ (Ed25519 +   │                               │ (AES-256-GCM │
+│  X25519 keys)│                               │  + cache)    │
+└─────────────┘                               └──────┬───────┘
+                                                      │
+                                                      ▼
+                                            ┌──────────────────┐
+                                            │MeshRepositoryImpl│
+                                            │ sendDirectMessage│
+                                            │ broadcastMessage │
+                                            └──────────────────┘
+```
+
+`KeyManager` owns key lifecycle (generation, storage, ECDH derivation). `CryptoService` owns encryption operations and the shared-secret cache. `MeshRepositoryImpl` orchestrates packet construction, signing, encryption, and relay — delegating crypto to the dedicated services.

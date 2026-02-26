@@ -47,6 +47,26 @@ class IsarService {
         .watch(fireImmediately: true);
   }
 
+  /// Watches messages exchanged in a direct conversation between two peers.
+  /// Returns messages where the sender/target pair matches either direction.
+  Stream<List<MessageEntity>> watchMessagesForPeer(
+    String peerPublicKey,
+    String myPublicKey,
+  ) async* {
+    final isar = await db;
+    yield* isar.messageEntitys
+        .filter()
+        .group(
+          (q) => q.senderIdEqualTo(peerPublicKey).targetIdEqualTo(myPublicKey),
+        )
+        .or()
+        .group(
+          (q) => q.senderIdEqualTo(myPublicKey).targetIdEqualTo(peerPublicKey),
+        )
+        .sortByTimestampDesc()
+        .watch(fireImmediately: true);
+  }
+
   Future<void> savePeer(PeerEntity peer) async {
     final isar = await db;
     await isar.writeTxn(() async {
@@ -70,6 +90,28 @@ class IsarService {
     final isar = await db;
     await isar.writeTxn(() async {
       await isar.peerEntitys.filter().deviceIdEqualTo(deviceId).deleteAll();
+    });
+  }
+
+  /// Deletes all messages exchanged between this device and a specific peer.
+  Future<void> deleteMessagesForPeer(
+    String peerPublicKey,
+    String myPublicKey,
+  ) async {
+    final isar = await db;
+    await isar.writeTxn(() async {
+      await isar.messageEntitys
+          .filter()
+          .group(
+            (q) =>
+                q.senderIdEqualTo(peerPublicKey).targetIdEqualTo(myPublicKey),
+          )
+          .or()
+          .group(
+            (q) =>
+                q.senderIdEqualTo(myPublicKey).targetIdEqualTo(peerPublicKey),
+          )
+          .deleteAll();
     });
   }
 

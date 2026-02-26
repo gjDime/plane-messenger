@@ -1,7 +1,8 @@
-
 import 'package:flutter/material.dart';
+import 'package:plane_messenger/core/security/key_manager.dart';
 import 'package:plane_messenger/core/user_prefs.dart';
 import 'package:plane_messenger/data/datasources/local/isar_service.dart';
+import 'package:plane_messenger/data/datasources/p2p/connection_manager.dart';
 import 'package:plane_messenger/data/models/peer_entity.dart';
 import 'package:plane_messenger/data/repositories/mesh_repository_impl.dart';
 import 'package:plane_messenger/presentation/pages/chat_page.dart';
@@ -36,18 +37,96 @@ class RadarPage extends StatefulWidget {
   State<RadarPage> createState() => _RadarPageState();
 }
 
-class _RadarPageState extends State<RadarPage> {
+class _RadarPageState extends State<RadarPage>
+    with SingleTickerProviderStateMixin {
   String? _myNickname;
+  String? _selectedPeerId;
+
+  late final AnimationController _wiggleController;
+  late final Animation<double> _wiggleAnimation;
 
   @override
   void initState() {
     super.initState();
     _loadNickname();
+    _wiggleController = AnimationController(
+      duration: const Duration(milliseconds: 200),
+      vsync: this,
+    );
+    _wiggleAnimation = Tween<double>(begin: -0.035, end: 0.035).animate(
+      CurvedAnimation(parent: _wiggleController, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _wiggleController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadNickname() async {
     final nickname = await UserPrefs.getNickname();
     if (mounted) setState(() => _myNickname = nickname);
+  }
+
+  void _selectPeer(String deviceId) {
+    setState(() => _selectedPeerId = deviceId);
+    _wiggleController.repeat(reverse: true);
+  }
+
+  void _deselectPeer() {
+    if (_selectedPeerId == null) return;
+    _wiggleController.stop();
+    _wiggleController.reset();
+    setState(() => _selectedPeerId = null);
+  }
+
+  Future<void> _deletePeer(PeerEntity peer) async {
+    final displayName =
+        peer.nickname ??
+        (peer.deviceId.length > 5
+            ? peer.deviceId.substring(0, 5)
+            : peer.deviceId);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Peer'),
+        content: Text(
+          'Delete "$displayName" and all message history? This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    _deselectPeer();
+
+    final isarService = getIt<IsarService>();
+
+    // Disconnect if currently connected.
+    if (peer.isConnected) {
+      await getIt<ConnectionManager>().disconnectFromEndpoint(peer.deviceId);
+    }
+
+    // Delete messages exchanged with this peer.
+    if (peer.publicKey.isNotEmpty) {
+      final myPublicKey = await getIt<KeyManager>().publicKeyBase64;
+      await isarService.deleteMessagesForPeer(peer.publicKey, myPublicKey);
+    }
+
+    // Delete the peer record.
+    await isarService.deletePeer(peer.deviceId);
   }
 
   Future<void> _showEditNicknameDialog() async {
@@ -72,7 +151,7 @@ class _RadarPageState extends State<RadarPage> {
     final isarService = getIt<IsarService>();
     final subtitle = _myNickname != null && _myNickname!.isNotEmpty
         ? 'You: $_myNickname'
-        : 'Tap ✏ to set your name';
+        : 'Tap \u270f to set your name';
 
     return Scaffold(
       appBar: AppBar(
@@ -82,10 +161,9 @@ class _RadarPageState extends State<RadarPage> {
             const Text('SkyMesh Radar'),
             Text(
               subtitle,
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
           ],
         ),
@@ -97,71 +175,161 @@ class _RadarPageState extends State<RadarPage> {
           ),
         ],
       ),
-      body: StreamBuilder<List<PeerEntity>>(
-        stream: isarService.watchPeers(),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return Center(child: Text('Error: ${snapshot.error}'));
-          }
+      body: RefreshIndicator(
+        onRefresh: () => getIt<MeshRepositoryImpl>().restartDiscovery(),
+        child: StreamBuilder<List<PeerEntity>>(
+          stream: isarService.watchPeers(),
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  SizedBox(
+                    height: MediaQuery.of(context).size.height * 0.7,
+                    child: Center(child: Text('Error: ${snapshot.error}')),
+                  ),
+                ],
+              );
+            }
 
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
 
-          if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Text('Scanning for peers...'));
-          }
+            if (!snapshot.hasData || snapshot.data!.isEmpty) {
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  SizedBox(
+                    height: MediaQuery.of(context).size.height * 0.7,
+                    child: const Center(
+                      child: Text(
+                        'Scanning for peers...\nPull down to refresh',
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            }
 
-          final peers = snapshot.data!;
-          return GridView.builder(
-            padding: const EdgeInsets.all(16),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              childAspectRatio: 1.0,
-              crossAxisSpacing: 16,
-              mainAxisSpacing: 16,
-            ),
-            itemCount: peers.length,
-            itemBuilder: (context, index) {
-              final peer = peers[index];
-              final displayName = peer.nickname ??
-                  (peer.deviceId.length > 5
-                      ? peer.deviceId.substring(0, 5)
-                      : peer.deviceId);
-              return GestureDetector(
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => ChatPage(peer: peer),
+            final peers = snapshot.data!;
+            return NotificationListener<ScrollStartNotification>(
+              onNotification: (_) {
+                _deselectPeer();
+                return false;
+              },
+              child: GridView.builder(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  childAspectRatio: 1.0,
+                  crossAxisSpacing: 16,
+                  mainAxisSpacing: 16,
+                ),
+                itemCount: peers.length,
+                itemBuilder: (context, index) {
+                  final peer = peers[index];
+                  final isSelected = _selectedPeerId == peer.deviceId;
+                  final displayName =
+                      peer.nickname ??
+                      (peer.deviceId.length > 5
+                          ? peer.deviceId.substring(0, 5)
+                          : peer.deviceId);
+
+                  Widget card = Card(
+                    color: peer.isConnected
+                        ? Colors.green.shade100
+                        : Colors.grey.shade200,
+                    child: Stack(
+                      children: [
+                        Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(_iconForPeer(peer.deviceId), size: 40),
+                              const SizedBox(height: 8),
+                              Text(
+                                displayName,
+                                style: Theme.of(context).textTheme.titleMedium,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              Text(
+                                peer.isConnected ? 'Connected' : 'Seen',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (isSelected)
+                          Positioned(
+                            top: 4,
+                            right: 4,
+                            child: Material(
+                              elevation: 4,
+                              borderRadius: BorderRadius.circular(16),
+                              color: Theme.of(context).colorScheme.surface,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  InkWell(
+                                    borderRadius: BorderRadius.circular(16),
+                                    onTap: () => _deletePeer(peer),
+                                    child: const Padding(
+                                      padding: EdgeInsets.all(6),
+                                      child: Icon(
+                                        Icons.delete_outline,
+                                        color: Colors.red,
+                                        size: 20,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   );
+
+                  if (isSelected) {
+                    card = AnimatedBuilder(
+                      animation: _wiggleAnimation,
+                      builder: (context, child) => Transform.rotate(
+                        angle: _wiggleAnimation.value,
+                        child: child,
+                      ),
+                      child: card,
+                    );
+                  }
+
+                  return GestureDetector(
+                    onTap: () {
+                      if (_selectedPeerId != null) {
+                        _deselectPeer();
+                        return;
+                      }
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => ChatPage(peer: peer),
+                        ),
+                      );
+                    },
+                    onLongPress: () {
+                      if (isSelected) {
+                        _deselectPeer();
+                      } else {
+                        _selectPeer(peer.deviceId);
+                      }
+                    },
+                    child: card,
+                  );
                 },
-                child: Card(
-                  color: peer.isConnected
-                      ? Colors.green.shade100
-                      : Colors.grey.shade200,
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(_iconForPeer(peer.deviceId), size: 40),
-                      const SizedBox(height: 8),
-                      Text(
-                        displayName,
-                        style: Theme.of(context).textTheme.titleMedium,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      Text(
-                        peer.isConnected ? 'Connected' : 'Seen',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          );
-        },
+              ),
+            );
+          },
+        ),
       ),
     );
   }

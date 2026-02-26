@@ -12,6 +12,8 @@ class PeerEntity {
 
   late String publicKey; // Base64-encoded Ed25519 public key; empty string until handshake completes
 
+  String x25519PublicKey = ''; // Base64-encoded X25519 public key for ECDH; empty until handshake
+
   late int lastSeen; // Milliseconds since Unix epoch of last observed activity
 
   bool isConnected = false; // True while an active Nearby Connections session exists

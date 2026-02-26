@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:plane_messenger/core/security/crypto_service.dart';
 import 'package:plane_messenger/core/security/key_manager.dart';
 import 'package:plane_messenger/data/datasources/local/isar_service.dart';
 import 'package:plane_messenger/data/datasources/p2p/connection_manager.dart';
 import 'package:plane_messenger/data/repositories/mesh_repository_impl.dart';
 import 'package:plane_messenger/core/user_prefs.dart';
 import 'package:plane_messenger/presentation/pages/error_page.dart';
-import 'package:plane_messenger/presentation/pages/radar_page.dart';
+import 'package:plane_messenger/presentation/pages/preflight_page.dart';
 
 final getIt = GetIt.instance;
 
@@ -17,53 +17,17 @@ void main() async {
   String? initError;
 
   try {
-    final permissionsGranted = await _requestPermissions();
-    if (!permissionsGranted) {
-      throw Exception(
-        'Required permissions not granted. Please enable Location and Bluetooth permissions.',
-      );
-    }
-
+    // Phase 1: Storage and crypto — no permissions required.
     final isarService = IsarService();
     await isarService.openDB();
-    // Reset connection flags from the previous session. Records are kept so
-    // that returning devices can be matched by public key and their stored
-    // nicknames are preserved across restarts.
     await isarService.resetConnectionStatus();
     getIt.registerSingleton<IsarService>(isarService);
 
     final keyManager = await KeyManager.instance;
     getIt.registerSingleton<KeyManager>(keyManager);
 
-    const int kUserNameLength = 8;
-    final storedNickname = await UserPrefs.getNickname();
-    final displayName = (storedNickname != null && storedNickname.isNotEmpty)
-        ? storedNickname
-        : (await keyManager.publicKeyBase64).substring(0, kUserNameLength);
-    final connectionManager = ConnectionManager(
-      userName: displayName,
-      onConnectionInitiated: (id, info) {
-        getIt<ConnectionManager>().acceptConnection(id);
-      },
-      onConnectionResult: (id) {
-        getIt<MeshRepositoryImpl>().onConnectionEstablished(id);
-      },
-      onDisconnected: (id) {
-        getIt<MeshRepositoryImpl>().onPeerDisconnected(id);
-      },
-      onPayloadReceived: (id, payload) {
-        getIt<MeshRepositoryImpl>().onPayloadReceived(id, payload);
-      },
-    );
-    getIt.registerSingleton<ConnectionManager>(connectionManager);
-
-    final meshRepo = MeshRepositoryImpl(
-      connectionManager: connectionManager,
-      isarService: isarService,
-      keyManager: keyManager,
-    );
-    await meshRepo.initialize();
-    getIt.registerSingleton<MeshRepositoryImpl>(meshRepo);
+    final cryptoService = CryptoService(keyManager: keyManager);
+    getIt.registerSingleton<CryptoService>(cryptoService);
   } catch (e, stackTrace) {
     initError = e.toString();
     debugPrint('[INIT] Error: $e\n$stackTrace');
@@ -72,34 +36,44 @@ void main() async {
   runApp(MyApp(initError: initError));
 }
 
-Future<bool> _requestPermissions() async {
-  final permissions = [
-    Permission.location,
-    Permission.bluetooth,
-    Permission.bluetoothAdvertise,
-    Permission.bluetoothConnect,
-    Permission.bluetoothScan,
-    Permission.nearbyWifiDevices,
-  ];
+/// Phase 2: Mesh networking — called by [PreflightPage] after permissions and
+/// hardware services have been verified.
+Future<void> initializeMesh() async {
+  if (getIt.isRegistered<MeshRepositoryImpl>()) return;
 
-  final statuses = await permissions.request();
+  final keyManager = getIt<KeyManager>();
 
-  // Check if all critical permissions are granted
-  final criticalPermissions = [
-    Permission.location,
-    Permission.bluetoothAdvertise,
-    Permission.bluetoothConnect,
-    Permission.bluetoothScan,
-  ];
+  const kUserNameLength = 8;
+  final storedNickname = await UserPrefs.getNickname();
+  final displayName = (storedNickname != null && storedNickname.isNotEmpty)
+      ? storedNickname
+      : (await keyManager.publicKeyBase64).substring(0, kUserNameLength);
 
-  for (final permission in criticalPermissions) {
-    final status = statuses[permission];
-    if (status == null || (!status.isGranted && !status.isLimited)) {
-      return false;
-    }
-  }
+  final connectionManager = ConnectionManager(
+    userName: displayName,
+    onConnectionInitiated: (id, info) {
+      getIt<ConnectionManager>().acceptConnection(id);
+    },
+    onConnectionResult: (id) {
+      getIt<MeshRepositoryImpl>().onConnectionEstablished(id);
+    },
+    onDisconnected: (id) {
+      getIt<MeshRepositoryImpl>().onPeerDisconnected(id);
+    },
+    onPayloadReceived: (id, payload) {
+      getIt<MeshRepositoryImpl>().onPayloadReceived(id, payload);
+    },
+  );
+  getIt.registerSingleton<ConnectionManager>(connectionManager);
 
-  return true;
+  final meshRepo = MeshRepositoryImpl(
+    connectionManager: connectionManager,
+    isarService: getIt<IsarService>(),
+    keyManager: keyManager,
+    cryptoService: getIt<CryptoService>(),
+  );
+  await meshRepo.initialize();
+  getIt.registerSingleton<MeshRepositoryImpl>(meshRepo);
 }
 
 class MyApp extends StatelessWidget {
@@ -116,13 +90,8 @@ class MyApp extends StatelessWidget {
         useMaterial3: true,
       ),
       home: initError != null
-          ? ErrorPage(
-              error: initError!,
-              onRetry: () {
-                // TODO: use a package like restart_app for a full restart
-              },
-            )
-          : const RadarPage(),
+          ? ErrorPage(error: initError!)
+          : const PreflightPage(),
     );
   }
 }

@@ -41,6 +41,11 @@ const PeerEntitySchema = CollectionSchema(
       id: 4,
       name: r'publicKey',
       type: IsarType.string,
+    ),
+    r'x25519PublicKey': PropertySchema(
+      id: 5,
+      name: r'x25519PublicKey',
+      type: IsarType.string,
     )
   },
   estimateSize: _peerEntityEstimateSize,
@@ -85,6 +90,7 @@ int _peerEntityEstimateSize(
     }
   }
   bytesCount += 3 + object.publicKey.length * 3;
+  bytesCount += 3 + object.x25519PublicKey.length * 3;
   return bytesCount;
 }
 
@@ -99,6 +105,7 @@ void _peerEntitySerialize(
   writer.writeLong(offsets[2], object.lastSeen);
   writer.writeString(offsets[3], object.nickname);
   writer.writeString(offsets[4], object.publicKey);
+  writer.writeString(offsets[5], object.x25519PublicKey);
 }
 
 PeerEntity _peerEntityDeserialize(
@@ -114,6 +121,7 @@ PeerEntity _peerEntityDeserialize(
   object.lastSeen = reader.readLong(offsets[2]);
   object.nickname = reader.readStringOrNull(offsets[3]);
   object.publicKey = reader.readString(offsets[4]);
+  object.x25519PublicKey = reader.readString(offsets[5]);
   return object;
 }
 
@@ -133,6 +141,8 @@ P _peerEntityDeserializeProp<P>(
     case 3:
       return (reader.readStringOrNull(offset)) as P;
     case 4:
+      return (reader.readString(offset)) as P;
+    case 5:
       return (reader.readString(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
@@ -865,6 +875,142 @@ extension PeerEntityQueryFilter
       ));
     });
   }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterFilterCondition>
+      x25519PublicKeyEqualTo(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'x25519PublicKey',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterFilterCondition>
+      x25519PublicKeyGreaterThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'x25519PublicKey',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterFilterCondition>
+      x25519PublicKeyLessThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'x25519PublicKey',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterFilterCondition>
+      x25519PublicKeyBetween(
+    String lower,
+    String upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'x25519PublicKey',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterFilterCondition>
+      x25519PublicKeyStartsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.startsWith(
+        property: r'x25519PublicKey',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterFilterCondition>
+      x25519PublicKeyEndsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.endsWith(
+        property: r'x25519PublicKey',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterFilterCondition>
+      x25519PublicKeyContains(String value, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.contains(
+        property: r'x25519PublicKey',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterFilterCondition>
+      x25519PublicKeyMatches(String pattern, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.matches(
+        property: r'x25519PublicKey',
+        wildcard: pattern,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterFilterCondition>
+      x25519PublicKeyIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'x25519PublicKey',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterFilterCondition>
+      x25519PublicKeyIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        property: r'x25519PublicKey',
+        value: '',
+      ));
+    });
+  }
 }
 
 extension PeerEntityQueryObject
@@ -932,6 +1078,19 @@ extension PeerEntityQuerySortBy
   QueryBuilder<PeerEntity, PeerEntity, QAfterSortBy> sortByPublicKeyDesc() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'publicKey', Sort.desc);
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterSortBy> sortByX25519PublicKey() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'x25519PublicKey', Sort.asc);
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterSortBy>
+      sortByX25519PublicKeyDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'x25519PublicKey', Sort.desc);
     });
   }
 }
@@ -1009,6 +1168,19 @@ extension PeerEntityQuerySortThenBy
       return query.addSortBy(r'publicKey', Sort.desc);
     });
   }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterSortBy> thenByX25519PublicKey() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'x25519PublicKey', Sort.asc);
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QAfterSortBy>
+      thenByX25519PublicKeyDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'x25519PublicKey', Sort.desc);
+    });
+  }
 }
 
 extension PeerEntityQueryWhereDistinct
@@ -1043,6 +1215,14 @@ extension PeerEntityQueryWhereDistinct
       {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
       return query.addDistinctBy(r'publicKey', caseSensitive: caseSensitive);
+    });
+  }
+
+  QueryBuilder<PeerEntity, PeerEntity, QDistinct> distinctByX25519PublicKey(
+      {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'x25519PublicKey',
+          caseSensitive: caseSensitive);
     });
   }
 }
@@ -1082,6 +1262,12 @@ extension PeerEntityQueryProperty
   QueryBuilder<PeerEntity, String, QQueryOperations> publicKeyProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'publicKey');
+    });
+  }
+
+  QueryBuilder<PeerEntity, String, QQueryOperations> x25519PublicKeyProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'x25519PublicKey');
     });
   }
 }

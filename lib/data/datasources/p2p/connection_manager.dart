@@ -77,13 +77,23 @@ class ConnectionManager {
     }
   }
 
+  /// Endpoint IDs with an active connection. Discovery skips these to avoid
+  /// `STATUS_ALREADY_CONNECTED_TO_ENDPOINT` errors after a refresh.
+  final Set<String> _connectedEndpoints = {};
+
+  void markConnected(String endpointId) => _connectedEndpoints.add(endpointId);
+  void markDisconnected(String endpointId) =>
+      _connectedEndpoints.remove(endpointId);
+
   Future<bool> startDiscovery() async {
     try {
       return await Nearby().startDiscovery(
         userName,
         strategy,
         onEndpointFound: (id, name, serviceId) {
-          requestConnection(id, name);
+          if (!_connectedEndpoints.contains(id)) {
+            requestConnection(id, name);
+          }
         },
         onEndpointLost: (id) {},
         serviceId: _serviceId,
