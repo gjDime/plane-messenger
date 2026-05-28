@@ -28,9 +28,13 @@ subprojects {
                     val setNamespace = android.javaClass.getMethod("setNamespace", String::class.java)
                     setNamespace.invoke(android, "dev.isar.isar_flutter_libs")
                     println("Successfully set namespace for $name")
+
+                    val setCompileSdk = android.javaClass.getMethod("setCompileSdkVersion", Int::class.java)
+                    setCompileSdk.invoke(android, 34)
+                    println("Successfully set compileSdk 34 for $name")
                 }
             } catch (e: Exception) {
-                println("Failed to set namespace for $name: $e")
+                println("Failed to configure $name: $e")
             }
         }
     }

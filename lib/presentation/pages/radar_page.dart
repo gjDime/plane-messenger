@@ -1,15 +1,17 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:plane_messenger/core/security/key_manager.dart';
-import 'package:plane_messenger/core/user_prefs.dart';
-import 'package:plane_messenger/data/datasources/local/isar_service.dart';
-import 'package:plane_messenger/data/datasources/p2p/connection_manager.dart';
+import 'package:plane_messenger/data/models/group_entity.dart';
 import 'package:plane_messenger/data/models/peer_entity.dart';
-import 'package:plane_messenger/data/repositories/mesh_repository_impl.dart';
-import 'package:plane_messenger/presentation/pages/chat_page.dart';
+import 'package:plane_messenger/data/services/group_management_handler.dart';
 import 'package:plane_messenger/main.dart';
+import 'package:plane_messenger/presentation/notification_navigator.dart';
+import 'package:plane_messenger/presentation/pages/chat_page.dart';
+import 'package:plane_messenger/presentation/pages/create_group_page.dart';
+import 'package:plane_messenger/presentation/pages/group_chat_page.dart';
+import 'package:plane_messenger/presentation/viewmodels/chat_viewmodel.dart';
+import 'package:plane_messenger/presentation/viewmodels/group_chat_viewmodel.dart';
+import 'package:plane_messenger/presentation/viewmodels/radar_viewmodel.dart';
 
 // Icon pool for peer cards. Selection is deterministic based on the peer's
 // deviceId hash so the same peer always shows the same icon.
@@ -41,25 +43,24 @@ class RadarPage extends StatefulWidget {
 }
 
 class _RadarPageState extends State<RadarPage>
-    with SingleTickerProviderStateMixin {
-  static const _serviceEvents = EventChannel('com.plane.messenger/service_events');
-  static const _systemChannel = MethodChannel('com.plane.messenger/system');
-
-  String? _myNickname;
-  String? _myPublicKey;
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+  late final RadarViewModel _viewModel;
   String? _selectedPeerId;
 
   late final AnimationController _wiggleController;
   late final Animation<double> _wiggleAnimation;
 
-  StreamSubscription<dynamic>? _serviceSubscription;
+  StreamSubscription<String>? _serviceSubscription;
+  StreamSubscription<PendingGroupInvite>? _groupInviteSub;
   bool _isServiceAlertShowing = false;
 
   @override
   void initState() {
     super.initState();
-    _loadNickname();
-    _loadMyPublicKey();
+    _viewModel = getIt<RadarViewModel>();
+    _viewModel.init().then((_) {
+      if (mounted) setState(() {});
+    });
     _wiggleController = AnimationController(
       duration: const Duration(milliseconds: 200),
       vsync: this,
@@ -68,20 +69,70 @@ class _RadarPageState extends State<RadarPage>
       CurvedAnimation(parent: _wiggleController, curve: Curves.easeInOut),
     );
     _subscribeToServiceEvents();
+    _subscribeToGroupInvites();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      NotificationNavigator.handlePendingNavigation();
+    });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _serviceSubscription?.cancel();
+    _groupInviteSub?.cancel();
     _wiggleController.dispose();
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _viewModel.refreshDiscovery();
+      NotificationNavigator.handlePendingNavigation();
+    }
+  }
+
   void _subscribeToServiceEvents() {
-    _serviceSubscription = _serviceEvents.receiveBroadcastStream().listen(
+    _serviceSubscription = _viewModel.serviceEventStream.listen(
       (event) {
-        if (mounted) _showServiceDisabledAlert(event as String);
+        if (mounted) _showServiceDisabledAlert(event);
       },
+    );
+  }
+
+  void _subscribeToGroupInvites() {
+    _groupInviteSub = _viewModel.pendingGroupInvites.listen((invite) {
+      if (mounted) _showGroupInviteDialog(invite);
+    });
+  }
+
+  Future<void> _showGroupInviteDialog(PendingGroupInvite invite) async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Group Invite'),
+        content: Text(
+          '${invite.inviterNickname ?? 'Someone'} invited you to '
+          '"${invite.groupName}"',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _viewModel.declineGroupInvite(invite);
+            },
+            child: const Text('Decline'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _viewModel.acceptGroupInvite(invite);
+            },
+            child: const Text('Accept'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -90,21 +141,21 @@ class _RadarPageState extends State<RadarPage>
 
     final String name;
     final String reason;
-    final String settingsMethod;
+    final Future<void> Function() openSettings;
 
     switch (event) {
       case 'bluetooth_off':
         name = 'Bluetooth';
         reason = 'Bluetooth is essential for SkyMesh to discover and connect with nearby devices.';
-        settingsMethod = 'openBluetoothSettings';
+        openSettings = _viewModel.openBluetoothSettings;
       case 'wifi_off':
         name = 'Wi-Fi';
         reason = 'Wi-Fi is essential for high-speed mesh communication in SkyMesh.';
-        settingsMethod = 'openWifiSettings';
+        openSettings = _viewModel.openWifiSettings;
       case 'location_off':
         name = 'Location';
         reason = 'Location services are essential for peer discovery in SkyMesh.';
-        settingsMethod = 'openLocationSettings';
+        openSettings = _viewModel.openLocationSettings;
       default:
         return;
     }
@@ -125,7 +176,7 @@ class _RadarPageState extends State<RadarPage>
             FilledButton(
               onPressed: () {
                 Navigator.pop(ctx);
-                _systemChannel.invokeMethod(settingsMethod);
+                openSettings();
               },
               child: Text('Turn On $name'),
             ),
@@ -135,16 +186,6 @@ class _RadarPageState extends State<RadarPage>
     } finally {
       _isServiceAlertShowing = false;
     }
-  }
-
-  Future<void> _loadNickname() async {
-    final nickname = await UserPrefs.getNickname();
-    if (mounted) setState(() => _myNickname = nickname);
-  }
-
-  Future<void> _loadMyPublicKey() async {
-    final key = await getIt<KeyManager>().publicKeyBase64;
-    if (mounted) setState(() => _myPublicKey = key);
   }
 
   void _selectPeer(String deviceId) {
@@ -187,48 +228,53 @@ class _RadarPageState extends State<RadarPage>
     );
 
     if (confirmed != true) return;
-
     _deselectPeer();
+    await _viewModel.deletePeer(peer);
+  }
 
-    final isarService = getIt<IsarService>();
+  Future<void> _deleteGroup(GroupEntity group) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Group'),
+        content: Text(
+          'Delete "${group.name}" and all messages? This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
 
-    // Disconnect if currently connected.
-    if (peer.isConnected) {
-      await getIt<ConnectionManager>().disconnectFromEndpoint(peer.deviceId);
-    }
-
-    // Delete messages exchanged with this peer.
-    if (peer.publicKey.isNotEmpty) {
-      final myPublicKey = await getIt<KeyManager>().publicKeyBase64;
-      await isarService.deleteMessagesForPeer(peer.publicKey, myPublicKey);
-    }
-
-    // Delete the peer record.
-    await isarService.deletePeer(peer.deviceId);
+    if (confirmed != true) return;
+    _deselectPeer();
+    await _viewModel.deleteGroup(group);
   }
 
   Future<void> _showEditNicknameDialog() async {
-    // _NicknameDialog is a StatefulWidget that owns its TextEditingController.
-    // The framework calls its dispose() at the right point during the pop
-    // animation, avoiding the _dependents.isEmpty assertion that occurs when
-    // a controller is disposed externally while the TextField is still rendering.
     final saved = await showDialog<String>(
       context: context,
-      builder: (_) => _NicknameDialog(initialValue: _myNickname ?? ''),
+      builder: (_) => _NicknameDialog(initialValue: _viewModel.myNickname ?? ''),
     );
 
     if (saved != null && saved.isNotEmpty) {
-      await UserPrefs.saveNickname(saved);
-      getIt<MeshRepositoryImpl>().broadcastNicknameUpdate(saved);
-      if (mounted) setState(() => _myNickname = saved);
+      await _viewModel.changeNickname(saved);
+      if (mounted) setState(() {});
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final isarService = getIt<IsarService>();
-    final subtitle = _myNickname != null && _myNickname!.isNotEmpty
-        ? 'You: $_myNickname'
+    final nickname = _viewModel.myNickname;
+    final subtitle = nickname != null && nickname.isNotEmpty
+        ? 'You: $nickname'
         : 'Tap \u270f to set your name';
 
     return Scaffold(
@@ -253,10 +299,21 @@ class _RadarPageState extends State<RadarPage>
           ),
         ],
       ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => CreateGroupPage(viewModel: _viewModel),
+            ),
+          );
+        },
+        child: const Icon(Icons.group_add),
+      ),
       body: RefreshIndicator(
-        onRefresh: () => getIt<MeshRepositoryImpl>().restartDiscovery(),
-        child: StreamBuilder<List<PeerEntity>>(
-          stream: isarService.watchPeers(),
+        onRefresh: _viewModel.refreshDiscovery,
+        child: StreamBuilder<List<RadarItem>>(
+          stream: _viewModel.watchRadarItems(),
           builder: (context, snapshot) {
             if (snapshot.hasError) {
               return ListView(
@@ -290,7 +347,7 @@ class _RadarPageState extends State<RadarPage>
               );
             }
 
-            final peers = snapshot.data!;
+            final items = snapshot.data!;
             return NotificationListener<ScrollStartNotification>(
               onNotification: (_) {
                 _deselectPeer();
@@ -305,132 +362,199 @@ class _RadarPageState extends State<RadarPage>
                   crossAxisSpacing: 16,
                   mainAxisSpacing: 16,
                 ),
-                itemCount: peers.length,
+                itemCount: items.length,
                 itemBuilder: (context, index) {
-                  final peer = peers[index];
-                  final isSelected = _selectedPeerId == peer.deviceId;
-                  final displayName =
-                      peer.nickname ??
-                      (peer.deviceId.length > 5
-                          ? peer.deviceId.substring(0, 5)
-                          : peer.deviceId);
-
-                  final hasKey =
-                      peer.publicKey.isNotEmpty && _myPublicKey != null;
-
-                  Widget card = Card(
-                    color: peer.isConnected
-                        ? Colors.green.shade100
-                        : Colors.grey.shade200,
-                    child: Stack(
-                      children: [
-                        Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              if (hasKey)
-                                StreamBuilder<int>(
-                                  stream:
-                                      isarService.watchUnreadCountForPeer(
-                                        peer.publicKey,
-                                        _myPublicKey!,
-                                        peer.lastReadTimestamp,
-                                      ),
-                                  builder: (context, snap) {
-                                    final count = snap.data ?? 0;
-                                    return Badge(
-                                      isLabelVisible: count > 0,
-                                      label: Text('$count'),
-                                      child: Icon(
-                                        _iconForPeer(peer.deviceId),
-                                        size: 40,
-                                      ),
-                                    );
-                                  },
-                                )
-                              else
-                                Icon(_iconForPeer(peer.deviceId), size: 40),
-                              const SizedBox(height: 8),
-                              Text(
-                                displayName,
-                                style: Theme.of(context).textTheme.titleMedium,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              Text(
-                                peer.isConnected ? 'Connected' : 'Seen',
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (isSelected)
-                          Positioned(
-                            top: 4,
-                            right: 4,
-                            child: Material(
-                              elevation: 4,
-                              borderRadius: BorderRadius.circular(16),
-                              color: Theme.of(context).colorScheme.surface,
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  InkWell(
-                                    borderRadius: BorderRadius.circular(16),
-                                    onTap: () => _deletePeer(peer),
-                                    child: const Padding(
-                                      padding: EdgeInsets.all(6),
-                                      child: Icon(
-                                        Icons.delete_outline,
-                                        color: Colors.red,
-                                        size: 20,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  );
-
-                  if (isSelected) {
-                    card = AnimatedBuilder(
-                      animation: _wiggleAnimation,
-                      builder: (context, child) => Transform.rotate(
-                        angle: _wiggleAnimation.value,
-                        child: child,
-                      ),
-                      child: card,
-                    );
-                  }
-
-                  return GestureDetector(
-                    onTap: () {
-                      if (_selectedPeerId != null) {
-                        _deselectPeer();
-                        return;
-                      }
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => ChatPage(peer: peer),
-                        ),
-                      );
-                    },
-                    onLongPress: () {
-                      if (isSelected) {
-                        _deselectPeer();
-                      } else {
-                        _selectPeer(peer.deviceId);
-                      }
-                    },
-                    child: card,
-                  );
+                  final item = items[index];
+                  return switch (item) {
+                    PeerRadarItem(:final peer) => _buildPeerCard(peer),
+                    GroupRadarItem(:final group) => _buildGroupCard(group),
+                  };
                 },
               ),
             );
           },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPeerCard(PeerEntity peer) {
+    final isSelected = _selectedPeerId == peer.deviceId;
+    final displayName =
+        peer.nickname ??
+        (peer.deviceId.length > 5
+            ? peer.deviceId.substring(0, 5)
+            : peer.deviceId);
+
+    final hasKey =
+        peer.publicKey.isNotEmpty && _viewModel.myPublicKey != null;
+
+    Widget card = Card(
+      color: peer.isConnected
+          ? Colors.green.shade100
+          : Colors.grey.shade200,
+      child: Stack(
+        children: [
+          Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (hasKey)
+                  StreamBuilder<int>(
+                    stream: _viewModel.watchUnreadCount(
+                      peer.publicKey,
+                      peer.lastReadTimestamp,
+                    ),
+                    builder: (context, snap) {
+                      final count = snap.data ?? 0;
+                      return Badge(
+                        isLabelVisible: count > 0,
+                        label: Text('$count'),
+                        child: Icon(
+                          _iconForPeer(peer.deviceId),
+                          size: 40,
+                        ),
+                      );
+                    },
+                  )
+                else
+                  Icon(_iconForPeer(peer.deviceId), size: 40),
+                const SizedBox(height: 8),
+                Text(
+                  displayName,
+                  style: Theme.of(context).textTheme.titleMedium,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  peer.isConnected ? 'Connected' : 'Seen',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          if (isSelected)
+            Positioned(
+              top: 4,
+              right: 4,
+              child: Material(
+                elevation: 4,
+                borderRadius: BorderRadius.circular(16),
+                color: Theme.of(context).colorScheme.surface,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    InkWell(
+                      borderRadius: BorderRadius.circular(16),
+                      onTap: () => _deletePeer(peer),
+                      child: const Padding(
+                        padding: EdgeInsets.all(6),
+                        child: Icon(
+                          Icons.delete_outline,
+                          color: Colors.red,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+
+    if (isSelected) {
+      card = AnimatedBuilder(
+        animation: _wiggleAnimation,
+        builder: (context, child) => Transform.rotate(
+          angle: _wiggleAnimation.value,
+          child: child,
+        ),
+        child: card,
+      );
+    }
+
+    return GestureDetector(
+      onTap: () {
+        if (_selectedPeerId != null) {
+          _deselectPeer();
+          return;
+        }
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ChatPage(
+              viewModel: getIt<ChatViewModel>(),
+              peer: peer,
+            ),
+          ),
+        );
+      },
+      onLongPress: () {
+        if (isSelected) {
+          _deselectPeer();
+        } else {
+          _selectPeer(peer.deviceId);
+        }
+      },
+      child: card,
+    );
+  }
+
+  Widget _buildGroupCard(GroupEntity group) {
+    return GestureDetector(
+      onTap: () {
+        if (_selectedPeerId != null) {
+          _deselectPeer();
+          return;
+        }
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => GroupChatPage(
+              viewModel: getIt<GroupChatViewModel>(),
+              group: group,
+            ),
+          ),
+        );
+      },
+      onLongPress: () => _deleteGroup(group),
+      child: Card(
+        color: Colors.indigo.shade100,
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              StreamBuilder<int>(
+                stream: _viewModel.watchGroupUnreadCount(
+                  group.groupId,
+                  group.lastReadTimestamp,
+                ),
+                builder: (context, snap) {
+                  final count = snap.data ?? 0;
+                  return Badge(
+                    isLabelVisible: count > 0,
+                    label: Text('$count'),
+                    child: const Icon(Icons.group, size: 40),
+                  );
+                },
+              ),
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Text(
+                  group.name,
+                  style: Theme.of(context).textTheme.titleMedium,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              Text(
+                '${group.memberPublicKeys.length} members',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
         ),
       ),
     );

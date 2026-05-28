@@ -1,6 +1,7 @@
 
 import 'package:flutter/foundation.dart';
 import 'package:nearby_connections/nearby_connections.dart';
+import 'package:plane_messenger/domain/services/p2p_connection_service.dart';
 
 /// Wraps Google's Nearby Connections API and exposes a clean, callback-based
 /// interface for the mesh networking layer.
@@ -22,7 +23,7 @@ import 'package:nearby_connections/nearby_connections.dart';
 /// handlers ([_handleConnectionInitiated], [_handleConnectionResult],
 /// [_handleDisconnected]) so every connection — regardless of which side
 /// initiated it — goes through an identical code path.
-class ConnectionManager {
+class ConnectionManager implements P2PConnectionService {
   static const _serviceId = 'com.plane.messenger';
 
   final Strategy strategy = Strategy.P2P_CLUSTER;
@@ -61,6 +62,7 @@ class ConnectionManager {
     onDisconnected(id);
   }
 
+  @override
   Future<bool> startAdvertising() async {
     try {
       return await Nearby().startAdvertising(
@@ -77,14 +79,17 @@ class ConnectionManager {
     }
   }
 
-  /// Endpoint IDs with an active connection. Discovery skips these to avoid
-  /// `STATUS_ALREADY_CONNECTED_TO_ENDPOINT` errors after a refresh.
+  /// Endpoint IDs with an active connection. Single source of truth for the app.
   final Set<String> _connectedEndpoints = {};
+
+  @override
+  Set<String> get connectedEndpoints => Set.unmodifiable(_connectedEndpoints);
 
   void markConnected(String endpointId) => _connectedEndpoints.add(endpointId);
   void markDisconnected(String endpointId) =>
       _connectedEndpoints.remove(endpointId);
 
+  @override
   Future<bool> startDiscovery() async {
     try {
       return await Nearby().startDiscovery(
@@ -104,10 +109,13 @@ class ConnectionManager {
     }
   }
 
+  @override
   Future<void> stopAdvertising() async => Nearby().stopAdvertising();
 
+  @override
   Future<void> stopDiscovery() async => Nearby().stopDiscovery();
 
+  @override
   Future<void> requestConnection(String endpointId, String name) async {
     try {
       await Nearby().requestConnection(
@@ -122,6 +130,7 @@ class ConnectionManager {
     }
   }
 
+  @override
   Future<void> acceptConnection(String endpointId) async {
     await Nearby().acceptConnection(
       endpointId,
@@ -139,10 +148,12 @@ class ConnectionManager {
     );
   }
 
+  @override
   Future<void> sendPayload(String endpointId, Uint8List bytes) async {
     await Nearby().sendBytesPayload(endpointId, bytes);
   }
 
+  @override
   Future<void> disconnectFromEndpoint(String endpointId) async {
     await Nearby().disconnectFromEndpoint(endpointId);
   }

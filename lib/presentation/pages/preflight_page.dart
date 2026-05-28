@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:plane_messenger/domain/services/notification_service.dart';
+import 'package:plane_messenger/domain/services/system_service.dart';
 import 'package:plane_messenger/main.dart';
 import 'package:plane_messenger/presentation/pages/error_page.dart';
 import 'package:plane_messenger/presentation/pages/radar_page.dart';
@@ -19,11 +20,12 @@ class PreflightPage extends StatefulWidget {
 
 class _PreflightPageState extends State<PreflightPage>
     with WidgetsBindingObserver {
-  static const _systemChannel = MethodChannel('com.plane.messenger/system');
 
   /// True while the user is in a system settings screen so that we re-run the
   /// preflight check when they return to the app.
   bool _awaitingReturn = false;
+
+  SystemService get _systemService => getIt<SystemService>();
 
   @override
   void initState() {
@@ -46,10 +48,6 @@ class _PreflightPageState extends State<PreflightPage>
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Preflight sequence
-  // ---------------------------------------------------------------------------
-
   Future<void> _runPreflight() async {
     if (!await _ensurePermissions()) return;
 
@@ -58,7 +56,7 @@ class _PreflightPageState extends State<PreflightPage>
       reason:
           'Location services must be enabled for peer discovery to work.',
       isEnabled: () => Permission.location.serviceStatus.isEnabled,
-      openSettings: () => _systemChannel.invokeMethod('openLocationSettings'),
+      openSettings: () => _systemService.openLocationSettings(),
     )) { return; }
 
     if (!await _ensureServiceEnabled(
@@ -66,16 +64,18 @@ class _PreflightPageState extends State<PreflightPage>
       reason:
           'Bluetooth is needed to discover and connect with nearby devices.',
       isEnabled: () => Permission.bluetooth.serviceStatus.isEnabled,
-      openSettings: () => _systemChannel.invokeMethod('openBluetoothSettings'),
+      openSettings: () => _systemService.openBluetoothSettings(),
     )) { return; }
 
     if (!await _ensureServiceEnabled(
       name: 'Wi-Fi',
       reason: 'Wi-Fi is required for high-speed mesh communication.',
-      isEnabled: _isWifiEnabled,
-      openSettings: () => _systemChannel.invokeMethod('openWifiSettings'),
+      isEnabled: () => _systemService.isWifiEnabled,
+      openSettings: () => _systemService.openWifiSettings(),
     )) { return; }
 
+    if (!mounted) return;
+    await getIt<NotificationService>().requestPermission();
     if (!mounted) return;
     try {
       await initializeMesh();
@@ -92,10 +92,6 @@ class _PreflightPageState extends State<PreflightPage>
       );
     }
   }
-
-  // ---------------------------------------------------------------------------
-  // Runtime permissions
-  // ---------------------------------------------------------------------------
 
   Future<bool> _ensurePermissions() async {
     final statuses = await [
@@ -149,24 +145,6 @@ class _PreflightPageState extends State<PreflightPage>
     return false;
   }
 
-  // ---------------------------------------------------------------------------
-  // Hardware services (Location / Bluetooth / Wi-Fi)
-  // ---------------------------------------------------------------------------
-
-  Future<bool> _isWifiEnabled() async {
-    try {
-      return await _systemChannel.invokeMethod<bool>('isWifiEnabled') ?? true;
-    } catch (_) {
-      // If the check fails (e.g. platform not supported), assume enabled.
-      return true;
-    }
-  }
-
-  /// Shows a dialog prompting the user to enable [name] if it is currently off.
-  ///
-  /// The dialog has a single "Turn On [name]" button that opens the relevant
-  /// system settings screen. Nothing is toggled automatically.
-  /// Returns `true` if the service is already enabled, `false` otherwise.
   Future<bool> _ensureServiceEnabled({
     required String name,
     required String reason,
@@ -196,10 +174,6 @@ class _PreflightPageState extends State<PreflightPage>
     );
     return false;
   }
-
-  // ---------------------------------------------------------------------------
-  // UI
-  // ---------------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {

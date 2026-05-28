@@ -22,7 +22,7 @@ class MessageEntity {
   late String senderId; // Base64-encoded Ed25519 public key of the sender
   late String targetId; // Recipient public key, or "BROADCAST" for mesh-wide messages
 
-  late String payload; // Message text (plain text for MVP; E2EE not yet implemented)
+  late String payload; // Message text (plaintext after decryption for DMs; plain text for broadcasts)
 
   late int timestamp; // Milliseconds since Unix epoch
 
@@ -35,6 +35,9 @@ class MessageEntity {
   int deliveryStatus = 0; // DeliveryStatus ordinal; 0 = sent (default)
 
   @ignore
-  DeliveryStatus get status => DeliveryStatus.values[deliveryStatus];
+  DeliveryStatus get status =>
+      (deliveryStatus >= 0 && deliveryStatus < DeliveryStatus.values.length)
+          ? DeliveryStatus.values[deliveryStatus]
+          : DeliveryStatus.sent;
   set status(DeliveryStatus s) => deliveryStatus = s.index;
 }
